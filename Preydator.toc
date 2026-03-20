@@ -3,7 +3,8 @@
 ## Notes: Tracks Prey Hunt progress with customizable visuals and sounds.
 ## Author: RagingAltoholic
 ## Category-enUS: Quests
-## Version: 1.7.3
+## Category-zhCN: 任务
+## Version: 2.0.0
 ## SavedVariables: PreydatorDB, PreydatorDebugDB
 ## OptionalDeps: Blizzard_Settings, LibStub, LibDataBroker-1.1, LibDBIcon-1.0
 

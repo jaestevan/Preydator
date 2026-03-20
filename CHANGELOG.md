@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.0.0 - 2026-03-19
+
+### Added
+- Introduced module runtime controls for `Bar`, `Sounds`, `Currency`, `Hunt Table`, and `Warband` with reload-aware settings UX.
+- Added module-aware settings gating across top-strip controls, Sounds page, Panels page sections, Currency matrix controls, and Theme controls.
+- Added quest-focused inspect diagnostics (`/pd inspectquest`, `/pd inspectquestbug`, `/pd inspectquestboth`) with BugSack-compatible payload output.
+
+### Changed
+- Updated one-time splash/version gate to `2.0.0` and refreshed release messaging.
+- First-load guidance now explicitly states the bar starts unlocked and should be locked in Options after positioning.
+- Updated release metadata/version touchpoints (`Preydator.toc`, build script default, README, CurseForge description).
+
+### Fixed
+- Bar module gating now correctly preserves disabled state (removed false-to-true coercion paths) and enforces disabled behavior at runtime.
+- Sounds module disable now blocks stage/ambush playback at core sound entry path (`TryPlaySound`).
+- Currency and Warband module disable now force-close windows, prevent reopen toggles, and stop live refresh/update paths when disabled.
+- Zone detection fallback for prey quests now uses quest log `isOnMap` when task-zone map IDs are unavailable.
+
+### Performance
+- Reduced unnecessary prey zone recomputation by caching zone status and refreshing only on relevant zone/quest transitions.
+- Kept module-disabled refresh routes short-circuited to avoid avoidable UI and currency update work.
+
+## 1.7.4 - 2026-03-19
+
+### Changed
+- New installs now default to an unlocked Preydator bar (`locked = false`) for easier first-time positioning.
+- Added inspect shorthand support: `/pd inspect bs` now routes inspect output to BugSack mode.
+
+### Fixed
+- Fixed multiple runtime regressions from stale bar/options references after internal UI state refactor (`barFrame`/`barFill`/options category references), resolving repeated nil-index errors in live updates and settings refresh flows.
+- Fixed Advanced settings reset actions to target live anchor settings:
+  - `Reset Bar Position` now resets `point` anchor/x/y.
+  - `Reset Tracker Positions` now resets tracker point tables and hunt panel side/anchor settings.
+
+### Performance
+- Reduced idle CPU churn by tightening prey update/event gates:
+  - Removed redundant CurrencyTracker quest-log polling path and kept currency refresh event-driven.
+  - Suppressed noisy widget/module fanout when there is no prey context.
+  - Added strict ambush scan gating to active prey + in-zone + pre-stage-4 only.
+  - Added out-of-zone fast-path handling to skip expensive widget/objective scans while a prey quest is active but player is outside prey zone.
+  - Added one-attempt stage sound guard to prevent repeated failed stage-4 sound retry loops after reload.
+
 ## 1.7.3 - 2026-03-15
 
 ### Fixed

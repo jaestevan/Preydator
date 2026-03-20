@@ -83,6 +83,8 @@ FILL_DIRECTION_UP = "up"
 FILL_DIRECTION_DOWN = "down"
 local FILL_INSET = 3
 local AMBUSH_ALERT_DURATION_SECONDS = 6
+local QUEST_LISTEN_BURST_SECONDS = 6
+local ACTIVE_PREY_QUEST_CACHE_SECONDS = 0.75
 local AMBUSH_SOUND_ALERT = "alert"
 local AMBUSH_SOUND_AMBUSH = "ambush"
 local AMBUSH_SOUND_TORMENT = "torment"
@@ -152,7 +154,7 @@ local DEFAULTS = {
     scale = 0.9,
     verticalScale = 0.9,
     fontSize = 12,
-    locked = true,
+    locked = false,
     forceShowBar = false,
     onlyShowInPreyZone = false,
     disableDefaultPreyIcon = false,
@@ -206,12 +208,14 @@ local DEFAULTS = {
     currencyWindowHeight = 236,
     currencyWindowFontSize = 14,
     currencyWindowScale = 1,
+    currencyWindowHideInInstance = false,
     currencyWarbandWindowEnabled = false,
     currencyWarbandWindowPoint = { anchor = "CENTER", relativePoint = "CENTER", x = 660, y = -80 },
     currencyWarbandWidth = 420,
     currencyWarbandHeight = 250,
     currencyWarbandFontSize = 12,
     currencyWarbandScale = 1,
+    currencyWarbandWindowHideInInstance = false,
     currencyWarbandCollapsedRealms = {},
     currencyWarbandShowPreyTrack = true,
     currencyWarbandPreyMode = "available",
@@ -285,6 +289,16 @@ local DEFAULTS = {
     borderColor = { 0.8, 0.2, 0.2, 0.85 },
     percentDisplay = PERCENT_DISPLAY_INSIDE,
     percentFallbackMode = PERCENT_FALLBACK_STAGE,
+    customizationV2 = {
+        moduleEnabled = {
+            bar = true,
+            sounds = true,
+            currency = true,
+            hunt = true,
+            warband = true,
+            achievement = false,  -- Not yet implemented
+        },
+    },
 }
 
 local settings
@@ -310,29 +324,80 @@ function Preydator:GetModule(name)
     return self.modules and self.modules[name] or nil
 end
 
+-- CustomizationStateV2: Manages module enable/disable state
+local CustomizationStateV2 = {
+    name = "CustomizationStateV2",
+}
+
+function CustomizationStateV2:IsModuleEnabled(moduleKey)
+    if type(moduleKey) ~= "string" or moduleKey == "" then
+        return true
+    end
+
+    local db = settings or _G.PreydatorDB or {}
+    local custV2 = db.customizationV2 or {}
+    local moduleState = custV2.moduleEnabled or {}
+
+    -- Default to true if not explicitly set to false
+    if moduleState[moduleKey] == nil then
+        return true
+    end
+    return moduleState[moduleKey] == true
+end
+
+function CustomizationStateV2:Set(path, value)
+    if type(path) ~= "string" or path == "" then
+        return
+    end
+
+    local db = settings or _G.PreydatorDB or {}
+    db.customizationV2 = db.customizationV2 or {}
+    db.customizationV2.moduleEnabled = db.customizationV2.moduleEnabled or {}
+
+    -- Parse path like "customizationV2.moduleEnabled.bar"
+    local parts = {}
+    for part in string.gmatch(path, "[^.]+") do
+        parts[#parts + 1] = part
+    end
+
+    if #parts == 3 and parts[1] == "customizationV2" and parts[2] == "moduleEnabled" then
+        local moduleKey = parts[3]
+        if type(moduleKey) == "string" and moduleKey ~= "" then
+            db.customizationV2.moduleEnabled[moduleKey] = value and true or false
+        end
+    end
+end
+
+Preydator:RegisterModule("CustomizationStateV2", CustomizationStateV2)
+
 local frame = CreateFrame("Frame")
 local warnedMissingSoundPaths = {}
-local barFrame
-local barFillContainer
-local barFill
-local barSpark
-local barText
-local stageText
-local stageSuffixText
-local barAlignmentDot
-local barBorder
-local barTickMarks = {}
-local barTickLabels = {}
-local optionsPanel
-local optionsCategoryID
-local optionsScrollFrame
-local optionsContentFrame
+
+-- UI frame references grouped in a table to reduce local variable count from ~30 to 1
+local UI = {
+    barFrame = false,
+    barFillContainer = false,
+    barFill = false,
+    barSpark = false,
+    barText = false,
+    stageText = false,
+    stageSuffixText = false,
+    barAlignmentDot = false,
+    barBorder = false,
+    barTickMarks = {},
+    barTickLabels = {},
+    optionsPanel = false,
+    optionsCategoryID = false,
+    optionsScrollFrame = false,
+    optionsContentFrame = false,
+    candidateWidgetSetIDs = {},
+    targetedWidgetGlobalFrameCache = {},
+    colorPickerSessionCounter = 0,
+}
+
 local EnsureOptionsPanel
 local OpenOptionsPanel
-local candidateWidgetSetIDs = {}
-local targetedWidgetGlobalFrameCache = {}
 local ExtractWidgetQuestID
-local colorPickerSessionCounter = 0
 local AddDebugLog
 local TryPlaySound
 local TryPlayStageSound
@@ -354,6 +419,7 @@ local state = {
     progressState = nil,
     progressPercent = nil,
     stageSoundPlayed = {},
+    stageSoundAttempted = {},
     forceShowBar = false,
     killStageUntil = 0,
     stage = 1,
@@ -372,6 +438,12 @@ local state = {
     ambushAlertUntil = 0,
     lastAmbushSystemMessage = nil,
     lastNotifiedPreyEndQuestID = nil,
+    questListenUntil = 0,
+    cachedActivePreyQuestID = nil,
+    cachedActivePreyQuestAt = 0,
+    playerMapID = nil,
+    playerMapHierarchy = nil,
+    zoneCacheDirty = true,
 }
 
 local UPDATE_INTERVAL_SECONDS = 0.5
@@ -386,15 +458,15 @@ Preydator.GetSettings = function()
 end
 
 Preydator.GetBarFrame = function()
-    return barFrame
+    return UI.barFrame
 end
 
 Preydator.GetLabelFrames = function()
     return {
-        prefix = stageText,
-        suffix = stageSuffixText,
-        percent = barText,
-        centerDot = barAlignmentDot,
+        prefix = UI.stageText,
+        suffix = UI.stageSuffixText,
+        percent = UI.barText,
+        centerDot = UI.barAlignmentDot,
     }
 end
 
@@ -948,32 +1020,83 @@ local function IsPlayerInPreyZone(preyMapID)
         return nil
     end
 
-    local playerMapID = C_Map.GetBestMapForUnit("player")
-    if not playerMapID then
+    if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
+        local playerMapID = C_Map.GetBestMapForUnit("player")
+        state.playerMapID = playerMapID
+        state.playerMapHierarchy = {}
+        state.zoneCacheDirty = false
+
+        local guard = 0
+        local currentMapID = playerMapID
+        while currentMapID and guard < 20 do
+            state.playerMapHierarchy[currentMapID] = true
+
+            local mapInfo = C_Map.GetMapInfo(currentMapID)
+            if not mapInfo or not mapInfo.parentMapID then
+                break
+            end
+
+            currentMapID = mapInfo.parentMapID
+            guard = guard + 1
+        end
+    end
+
+    if not state.playerMapID then
         return nil
     end
 
-    if playerMapID == preyMapID then
-        return true
+    return state.playerMapHierarchy[preyMapID] == true
+end
+
+local function IsPreyQuestOnCurrentMap(questID)
+    if not (questID and C_QuestLog and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetInfo) then
+        return nil
     end
 
-    local guard = 0
-    local currentMapID = playerMapID
-    while currentMapID and guard < 20 do
-        local mapInfo = C_Map.GetMapInfo(currentMapID)
-        if not mapInfo then
-            break
-        end
-
-        if mapInfo.parentMapID == preyMapID then
-            return true
-        end
-
-        currentMapID = mapInfo.parentMapID
-        guard = guard + 1
+    local logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
+    if not logIndex then
+        return nil
     end
 
-    return false
+    local info = C_QuestLog.GetInfo(logIndex)
+    if type(info) ~= "table" then
+        return nil
+    end
+
+    if info.isOnMap == nil then
+        return nil
+    end
+
+    return info.isOnMap == true
+end
+
+local function RefreshInPreyZoneStatus(questID, force)
+    if not IsValidQuestID(questID) then
+        state.inPreyZone = nil
+        return nil
+    end
+
+    local shouldRefresh = force == true or state.inPreyZone == nil or state.zoneCacheDirty == true
+    if not shouldRefresh then
+        return state.inPreyZone
+    end
+
+    local inPreyZone = nil
+    if state.preyZoneMapID then
+        inPreyZone = IsPlayerInPreyZone(state.preyZoneMapID)
+    else
+        inPreyZone = IsPreyQuestOnCurrentMap(questID)
+        -- For quests with no task-quest map ID, treat this as our zone snapshot.
+        state.zoneCacheDirty = false
+    end
+
+    if inPreyZone == nil then
+        inPreyZone = IsPreyQuestOnCurrentMap(questID)
+        state.zoneCacheDirty = false
+    end
+
+    state.inPreyZone = inPreyZone
+    return inPreyZone
 end
 
 local function GetDefaultStageSoundPath(stage)
@@ -1212,6 +1335,41 @@ local function GetCurrentActivePreyQuest()
     return nil
 end
 
+local function RefreshCurrentActivePreyQuestCache()
+    local now = GetTime and GetTime() or 0
+    state.cachedActivePreyQuestID = GetCurrentActivePreyQuest()
+    state.cachedActivePreyQuestAt = now
+    return state.cachedActivePreyQuestID
+end
+
+local function GetCurrentActivePreyQuestCached(maxAgeSeconds)
+    local now = GetTime and GetTime() or 0
+    local maxAge = tonumber(maxAgeSeconds)
+    if not maxAge or maxAge < 0 then
+        maxAge = ACTIVE_PREY_QUEST_CACHE_SECONDS
+    end
+
+    if (now - (state.cachedActivePreyQuestAt or 0)) > maxAge then
+        return RefreshCurrentActivePreyQuestCache()
+    end
+
+    return state.cachedActivePreyQuestID
+end
+
+local function ArmQuestListenBurst(durationSeconds)
+    local now = GetTime and GetTime() or 0
+    local duration = tonumber(durationSeconds)
+    if not duration or duration <= 0 then
+        duration = QUEST_LISTEN_BURST_SECONDS
+    end
+    local untilTime = now + duration
+    if untilTime > (state.questListenUntil or 0) then
+        state.questListenUntil = untilTime
+    end
+    -- Force a fresh quest sample when a relevant interaction starts.
+    RefreshCurrentActivePreyQuestCache()
+end
+
 local function GetQuestTitle(questID)
     if not (C_QuestLog and C_QuestLog.GetTitleForQuestID) then
         return nil
@@ -1282,6 +1440,15 @@ end
 
 local function ShouldScanAmbushChat()
     if not state or not IsValidQuestID(state.activeQuestID) then
+        return false
+    end
+
+    -- Ambush detection is only relevant before final stage and while in prey zone.
+    if tonumber(state.stage) == MAX_STAGE then
+        return false
+    end
+
+    if state.inPreyZone ~= true then
         return false
     end
 
@@ -1367,6 +1534,12 @@ AddDebugLog = function(kind, message, forcePrint)
 end
 
 TryPlaySound = function(path, ignoreSoundToggle)
+    local customization = Preydator and Preydator.GetModule and Preydator:GetModule("CustomizationStateV2")
+    if customization and type(customization.IsModuleEnabled) == "function" and customization:IsModuleEnabled("sounds") ~= true then
+        AddDebugLog("TryPlaySound", "blocked by sounds module disabled | path=" .. tostring(path), false)
+        return false
+    end
+
     if not ignoreSoundToggle and settings and settings.soundsEnabled == false then
         AddDebugLog("TryPlaySound", "blocked by soundsEnabled=false | path=" .. tostring(path), false)
         return false
@@ -1446,6 +1619,12 @@ TryPlayStageSound = function(stage, ignoreSoundToggle)
         return false
     end
 
+    if state.stageSoundAttempted[stage] then
+        return false
+    end
+
+    state.stageSoundAttempted[stage] = true
+
     if TryPlaySound(path, ignoreSoundToggle) then
         state.stageSoundPlayed[stage] = true
         AddDebugLog("TryPlayStageSound", "stage=" .. tostring(stage) .. " | success", false)
@@ -1472,7 +1651,7 @@ TryPlayStageSound = function(stage, ignoreSoundToggle)
 end
 
 local function ApplyBarSettings()
-    if not barFrame then
+    if not UI.barFrame then
         return
     end
 
@@ -1525,50 +1704,50 @@ local function ApplyBarSettings()
         settings.scale = frameScale
     end
 
-    barFrame:SetSize(scaledWidth, scaledHeight)
-    barFrame:SetScale(1)
-    barFrame:ClearAllPoints()
-    barFrame:SetPoint("CENTER", UIParent, "CENTER", point.x, point.y)
+    UI.barFrame:SetSize(scaledWidth, scaledHeight)
+    UI.barFrame:SetScale(1)
+    UI.barFrame:ClearAllPoints()
+    UI.barFrame:SetPoint("CENTER", UIParent, "CENTER", point.x, point.y)
 
-    if barFill then
+    if UI.barFill then
         local fill = settings.fillColor
-        barFill:ClearAllPoints()
-        barFill:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-        barFill:SetSize(0, math.max(1, scaledHeight - 2 * FILL_INSET))
-        barFill:SetTexture(TEXTURE_PRESETS[settings.textureKey] or TEXTURE_PRESETS.default)
-        barFill:SetVertexColor(fill[1], fill[2], fill[3], fill[4])
-        barFill:SetDrawLayer("ARTWORK", 0)
+        UI.barFill:ClearAllPoints()
+        UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+        UI.barFill:SetSize(0, math.max(1, scaledHeight - 2 * FILL_INSET))
+        UI.barFill:SetTexture(TEXTURE_PRESETS[settings.textureKey] or TEXTURE_PRESETS.default)
+        UI.barFill:SetVertexColor(fill[1], fill[2], fill[3], fill[4])
+        UI.barFill:SetDrawLayer("ARTWORK", 0)
 
-        if barBorder and barBorder.SetBackdropBorderColor then
+        if UI.barBorder and UI.barBorder.SetBackdropBorderColor then
             if settings.borderColorLinked == false and settings.borderColor then
                 local bc = settings.borderColor
-                barBorder:SetBackdropBorderColor(bc[1], bc[2], bc[3], bc[4] or 0.85)
+                UI.barBorder:SetBackdropBorderColor(bc[1], bc[2], bc[3], bc[4] or 0.85)
             else
-                barBorder:SetBackdropBorderColor(fill[1], fill[2], fill[3], math.max(0.65, fill[4] or 0.85))
+                UI.barBorder:SetBackdropBorderColor(fill[1], fill[2], fill[3], math.max(0.65, fill[4] or 0.85))
             end
         end
     end
 
-    if barSpark then
+    if UI.barSpark then
         local spark = settings.sparkColor or DEFAULTS.sparkColor
-        barSpark:SetColorTexture(spark[1], spark[2], spark[3], spark[4] or 0.9)
+        UI.barSpark:SetColorTexture(spark[1], spark[2], spark[3], spark[4] or 0.9)
         if orientation == ORIENTATION_VERTICAL then
-            barSpark:SetSize(math.max(1, scaledWidth - 2 * FILL_INSET), 2)
+            UI.barSpark:SetSize(math.max(1, scaledWidth - 2 * FILL_INSET), 2)
         else
-            barSpark:SetSize(2, math.max(1, scaledHeight - 2 * FILL_INSET))
+            UI.barSpark:SetSize(2, math.max(1, scaledHeight - 2 * FILL_INSET))
         end
-        barSpark:SetDrawLayer("OVERLAY", 3)
+        UI.barSpark:SetDrawLayer("OVERLAY", 3)
         if not settings.showSparkLine then
-            barSpark:Hide()
+            UI.barSpark:Hide()
         end
     end
 
-    if barFrame.BackgroundTexture then
+    if UI.barFrame.BackgroundTexture then
         local bg = settings.bgColor
-        barFrame.BackgroundTexture:ClearAllPoints()
-        barFrame.BackgroundTexture:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-        barFrame.BackgroundTexture:SetPoint("TOPRIGHT", barFrame, "TOPRIGHT", -FILL_INSET, -FILL_INSET)
-        barFrame.BackgroundTexture:SetColorTexture(bg[1], bg[2], bg[3], bg[4])
+        UI.barFrame.BackgroundTexture:ClearAllPoints()
+        UI.barFrame.BackgroundTexture:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+        UI.barFrame.BackgroundTexture:SetPoint("TOPRIGHT", UI.barFrame, "TOPRIGHT", -FILL_INSET, -FILL_INSET)
+        UI.barFrame.BackgroundTexture:SetColorTexture(bg[1], bg[2], bg[3], bg[4])
     end
 
     local labelRow = settings.labelRowPosition or LABEL_ROW_ABOVE
@@ -1582,15 +1761,15 @@ local function ApplyBarSettings()
     local verticalPercentOffset = Clamp(math.floor((tonumber(settings.verticalPercentOffset) or 10) + 0.5), 2, 60)
     local verticalTextAlign = settings.verticalTextAlign or "separate"
 
-    if stageText then
-        local _, _, flags = stageText:GetFont()
+    if UI.stageText then
+        local _, _, flags = UI.stageText:GetFont()
         local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
-        stageText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
+        UI.stageText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
         local titleColor = settings.titleColor or DEFAULTS.titleColor
-        stageText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
+        UI.stageText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
 
         local lm = settings.stageLabelMode or LABEL_MODE_CENTER
-        stageText:ClearAllPoints()
+        UI.stageText:ClearAllPoints()
         if orientation == ORIENTATION_VERTICAL then
             local anchorPoint, relativeAnchor, xOffset, yOffset
             if verticalTextAlign == "middle" then
@@ -1607,72 +1786,72 @@ local function ApplyBarSettings()
             else
                 anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, false)
             end
-            stageText:SetPoint(anchorPoint, barFrame, relativeAnchor, xOffset, yOffset)
-            stageText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
-            stageText:SetJustifyV("MIDDLE")
-            ApplyVerticalLabelRotation(stageText, true, verticalTextSide)
+            UI.stageText:SetPoint(anchorPoint, UI.barFrame, relativeAnchor, xOffset, yOffset)
+            UI.stageText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
+            UI.stageText:SetJustifyV("MIDDLE")
+            ApplyVerticalLabelRotation(UI.stageText, true, verticalTextSide)
         elseif lm == LABEL_MODE_LEFT or lm == LABEL_MODE_LEFT_COMBINED or lm == LABEL_MODE_LEFT_SUFFIX or lm == LABEL_MODE_SEPARATE then
             if labelRow == LABEL_ROW_BELOW then
-                stageText:SetPoint("TOPLEFT", barFrame, "BOTTOMLEFT", 2, -4)
+                UI.stageText:SetPoint("TOPLEFT", UI.barFrame, "BOTTOMLEFT", 2, -4)
             else
-                stageText:SetPoint("BOTTOMLEFT", barFrame, "TOPLEFT", 2, 4)
+                UI.stageText:SetPoint("BOTTOMLEFT", UI.barFrame, "TOPLEFT", 2, 4)
             end
-            stageText:SetJustifyH("LEFT")
-            ApplyVerticalLabelRotation(stageText, false, verticalTextSide)
+            UI.stageText:SetJustifyH("LEFT")
+            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
         elseif lm == LABEL_MODE_NONE then
             if labelRow == LABEL_ROW_BELOW then
-                stageText:SetPoint("TOP", barFrame, "BOTTOM", 0, -4)
+                UI.stageText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -4)
             else
-                stageText:SetPoint("BOTTOM", barFrame, "TOP", 0, 4)
+                UI.stageText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
             end
-            ApplyVerticalLabelRotation(stageText, false, verticalTextSide)
+            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
         else
             if labelRow == LABEL_ROW_BELOW then
-                stageText:SetPoint("TOP", barFrame, "BOTTOM", 0, -4)
+                UI.stageText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -4)
             else
-                stageText:SetPoint("BOTTOM", barFrame, "TOP", 0, 4)
+                UI.stageText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
             end
-            stageText:SetJustifyH("CENTER")
-            ApplyVerticalLabelRotation(stageText, false, verticalTextSide)
+            UI.stageText:SetJustifyH("CENTER")
+            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
         end
     end
 
-    if stageSuffixText then
-        local _, _, flags = stageSuffixText:GetFont()
+    if UI.stageSuffixText then
+        local _, _, flags = UI.stageSuffixText:GetFont()
         local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
-        stageSuffixText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
+        UI.stageSuffixText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
         local titleColor = settings.titleColor or DEFAULTS.titleColor
-        stageSuffixText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
-        stageSuffixText:ClearAllPoints()
+        UI.stageSuffixText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
+        UI.stageSuffixText:ClearAllPoints()
         if orientation == ORIENTATION_VERTICAL then
             local anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, true)
-            stageSuffixText:SetPoint(anchorPoint, barFrame, relativeAnchor, xOffset, yOffset)
-            stageSuffixText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
-            stageSuffixText:SetJustifyV("MIDDLE")
-            ApplyVerticalLabelRotation(stageSuffixText, true, verticalTextSide)
+            UI.stageSuffixText:SetPoint(anchorPoint, UI.barFrame, relativeAnchor, xOffset, yOffset)
+            UI.stageSuffixText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
+            UI.stageSuffixText:SetJustifyV("MIDDLE")
+            ApplyVerticalLabelRotation(UI.stageSuffixText, true, verticalTextSide)
         else
             if labelRow == LABEL_ROW_BELOW then
-                stageSuffixText:SetPoint("TOPRIGHT", barFrame, "BOTTOMRIGHT", -2, -4)
+                UI.stageSuffixText:SetPoint("TOPRIGHT", UI.barFrame, "BOTTOMRIGHT", -2, -4)
             else
-                stageSuffixText:SetPoint("BOTTOMRIGHT", barFrame, "TOPRIGHT", -2, 4)
+                UI.stageSuffixText:SetPoint("BOTTOMRIGHT", UI.barFrame, "TOPRIGHT", -2, 4)
             end
-            stageSuffixText:SetJustifyH("RIGHT")
-            ApplyVerticalLabelRotation(stageSuffixText, false, verticalTextSide)
+            UI.stageSuffixText:SetJustifyH("RIGHT")
+            ApplyVerticalLabelRotation(UI.stageSuffixText, false, verticalTextSide)
         end
     end
 
-    if barText then
-        local _, _, flags = barText:GetFont()
+    if UI.barText then
+        local _, _, flags = UI.barText:GetFont()
         local percentFont = FONT_PRESETS[settings.percentFontKey] or FONT_PRESETS.frizqt
-        barText:SetFont(percentFont, math.max(8, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 1) * frameScale)), flags)
+        UI.barText:SetFont(percentFont, math.max(8, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 1) * frameScale)), flags)
         local percentColor = settings.percentColor or DEFAULTS.percentColor
-        barText:SetTextColor(percentColor[1], percentColor[2], percentColor[3], percentColor[4] or 1)
+        UI.barText:SetTextColor(percentColor[1], percentColor[2], percentColor[3], percentColor[4] or 1)
         local percentLayer, percentSubLevel = GetPercentTextLayerSettings()
-        barText:SetDrawLayer(percentLayer, percentSubLevel)
+        UI.barText:SetDrawLayer(percentLayer, percentSubLevel)
     end
 
     local tickPercents = GetProgressTickPercents()
-    for index, tickLabel in ipairs(barTickLabels) do
+    for index, tickLabel in ipairs(UI.barTickLabels) do
         local hasTick = tickPercents[index] ~= nil
         if tickLabel then
             local _, _, flags = tickLabel:GetFont()
@@ -1688,7 +1867,7 @@ local function ApplyBarSettings()
             end
         end
 
-        local tickMark = barTickMarks[index]
+        local tickMark = UI.barTickMarks[index]
         if tickMark then
             local tickColor = settings.tickColor or DEFAULTS.tickColor
             tickMark:SetColorTexture(tickColor[1], tickColor[2], tickColor[3], tickColor[4] or 0.35)
@@ -1700,10 +1879,10 @@ local function ApplyBarSettings()
 
     local barWidth = scaledWidth
     local barHeight = scaledHeight
-    if barAlignmentDot then
-        barAlignmentDot:ClearAllPoints()
-        barAlignmentDot:SetPoint("CENTER", barFrame, "CENTER", 0, 0)
-        barAlignmentDot:Hide()
+    if UI.barAlignmentDot then
+        UI.barAlignmentDot:ClearAllPoints()
+        UI.barAlignmentDot:SetPoint("CENTER", UI.barFrame, "CENTER", 0, 0)
+        UI.barAlignmentDot:Hide()
     end
 
     local innerTickWidth = math.max(0, barWidth - (2 * FILL_INSET))
@@ -1723,23 +1902,23 @@ local function ApplyBarSettings()
                 x = math.floor((x / tickWidth) + 0.5) * tickWidth
             end
         end
-        local tickMark = barTickMarks[index]
+        local tickMark = UI.barTickMarks[index]
         if tickMark then
             if pct then
                 tickMark:ClearAllPoints()
                 if orientation == ORIENTATION_VERTICAL then
                     local renderPct = Preydator.GetRenderedVerticalPercent(pct, settings.verticalFillDirection)
                     if renderPct == 100 then
-                        tickMark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, barHeight - FILL_INSET - tickWidth)
+                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, barHeight - FILL_INSET - tickWidth)
                     else
-                        tickMark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, y)
+                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, y)
                     end
                     tickMark:SetSize(innerTickWidth, tickWidth)
                 else
                     if pct == 100 then
-                        tickMark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", barWidth - FILL_INSET - tickWidth, FILL_INSET)
+                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", barWidth - FILL_INSET - tickWidth, FILL_INSET)
                     else
-                        tickMark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", x, FILL_INSET)
+                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", x, FILL_INSET)
                     end
                     tickMark:SetSize(tickWidth, innerTickHeight)
                 end
@@ -1748,7 +1927,7 @@ local function ApplyBarSettings()
             end
         end
 
-        local tickLabel = barTickLabels[index]
+        local tickLabel = UI.barTickLabels[index]
         if tickLabel then
             if pct then
                 tickLabel:ClearAllPoints()
@@ -1763,37 +1942,37 @@ local function ApplyBarSettings()
                     elseif verticalPercentSide == "center" then
                         -- inside: below tick when fill up, above tick when fill down
                         if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                            tickLabel:SetPoint("BOTTOM", barFrame, "BOTTOM", 0, y + 2)
+                            tickLabel:SetPoint("BOTTOM", UI.barFrame, "BOTTOM", 0, y + 2)
                         else
-                            tickLabel:SetPoint("TOP", barFrame, "BOTTOM", 0, y - 2)
+                            tickLabel:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, y - 2)
                         end
                     elseif renderPct == 100 then
                         if verticalPercentSide == "left" then
-                            tickLabel:SetPoint("RIGHT", barFrame, "BOTTOMLEFT", -percentEdgeOffset, barHeight - FILL_INSET)
+                            tickLabel:SetPoint("RIGHT", UI.barFrame, "BOTTOMLEFT", -percentEdgeOffset, barHeight - FILL_INSET)
                         else
-                            tickLabel:SetPoint("LEFT", barFrame, "BOTTOMRIGHT", percentEdgeOffset, barHeight - FILL_INSET)
+                            tickLabel:SetPoint("LEFT", UI.barFrame, "BOTTOMRIGHT", percentEdgeOffset, barHeight - FILL_INSET)
                         end
                     else
                         if verticalPercentSide == "left" then
-                            tickLabel:SetPoint("RIGHT", barFrame, "BOTTOMLEFT", -percentEdgeOffset, y)
+                            tickLabel:SetPoint("RIGHT", UI.barFrame, "BOTTOMLEFT", -percentEdgeOffset, y)
                         else
-                            tickLabel:SetPoint("LEFT", barFrame, "BOTTOMRIGHT", percentEdgeOffset, y)
+                            tickLabel:SetPoint("LEFT", UI.barFrame, "BOTTOMRIGHT", percentEdgeOffset, y)
                         end
                     end
                 elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS then
                     if pct == 0 then
-                        tickLabel:SetPoint("BOTTOMLEFT", barFrame, "TOPLEFT", 0, 1)
+                        tickLabel:SetPoint("BOTTOMLEFT", UI.barFrame, "TOPLEFT", 0, 1)
                     elseif pct == 100 then
-                        tickLabel:SetPoint("BOTTOMRIGHT", barFrame, "TOPRIGHT", 0, 1)
+                        tickLabel:SetPoint("BOTTOMRIGHT", UI.barFrame, "TOPRIGHT", 0, 1)
                     else
-                        tickLabel:SetPoint("BOTTOM", barFrame, "BOTTOMLEFT", x, barHeight + 1)
+                        tickLabel:SetPoint("BOTTOM", UI.barFrame, "BOTTOMLEFT", x, barHeight + 1)
                     end
                 elseif pct == 0 then
-                    tickLabel:SetPoint("TOPLEFT", barFrame, "BOTTOMLEFT", 0, -1)
+                    tickLabel:SetPoint("TOPLEFT", UI.barFrame, "BOTTOMLEFT", 0, -1)
                 elseif pct == 100 then
-                    tickLabel:SetPoint("TOPRIGHT", barFrame, "BOTTOMRIGHT", 0, -1)
+                    tickLabel:SetPoint("TOPRIGHT", UI.barFrame, "BOTTOMRIGHT", 0, -1)
                 else
-                    tickLabel:SetPoint("TOP", barFrame, "BOTTOMLEFT", x, -1)
+                    tickLabel:SetPoint("TOP", UI.barFrame, "BOTTOMLEFT", x, -1)
                 end
                 tickLabel:SetText(tostring(pct))
                 tickLabel:SetDrawLayer("OVERLAY", 7)
@@ -1818,48 +1997,60 @@ local function ApplyBarSettings()
         and settings.showVerticalTickPercent == true
         and percentDisplayMode ~= PERCENT_DISPLAY_OFF
 
-    if barText then
+    if UI.barText then
         if verticalTicksReplacePercent then
-            barText:Hide()
+            UI.barText:Hide()
         elseif percentDisplayMode == PERCENT_DISPLAY_OFF then
-            barText:Hide()
+            UI.barText:Hide()
         elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_BAR then
-            barText:Show()
-            barText:ClearAllPoints()
+            UI.barText:Show()
+            UI.barText:ClearAllPoints()
             if orientation == ORIENTATION_VERTICAL then
-                barText:SetPoint("BOTTOM", barFrame, "TOP", 0, math.max(2, verticalPercentOffset))
+                UI.barText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, math.max(2, verticalPercentOffset))
             else
-                barText:SetPoint("BOTTOM", barFrame, "TOP", 0, 4)
+                UI.barText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
             end
         elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS then
-            barText:Hide()
+            UI.barText:Hide()
         elseif percentDisplayMode == PERCENT_DISPLAY_BELOW_BAR then
-            barText:Show()
-            barText:ClearAllPoints()
+            UI.barText:Show()
+            UI.barText:ClearAllPoints()
             if orientation == ORIENTATION_VERTICAL then
-                barText:SetPoint("TOP", barFrame, "BOTTOM", 0, -math.max(2, verticalPercentOffset))
+                UI.barText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -math.max(2, verticalPercentOffset))
             else
-                barText:SetPoint("TOP", barFrame, "BOTTOM", 0, -14)
+                UI.barText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -14)
             end
         elseif percentDisplayMode == PERCENT_DISPLAY_UNDER_TICKS then
-            barText:Hide()
+            UI.barText:Hide()
         else
-            barText:Show()
-            barText:ClearAllPoints()
+            UI.barText:Show()
+            UI.barText:ClearAllPoints()
             if orientation == ORIENTATION_VERTICAL then
-                barText:SetPoint("CENTER", barFrame, "CENTER", 0, 0)
-                barText:SetDrawLayer("OVERLAY", 7)
+                UI.barText:SetPoint("CENTER", UI.barFrame, "CENTER", 0, 0)
+                UI.barText:SetDrawLayer("OVERLAY", 7)
             else
-                barText:SetPoint("center", barFrame, "center", 0, 0)
+                UI.barText:SetPoint("center", UI.barFrame, "center", 0, 0)
             end
         end
     end
 
-    barFrame:SetMovable(true)
+    UI.barFrame:SetMovable(true)
 end
 
 local function EnsureBar()
-    if barFrame then
+    local customizationV2 = Preydator:GetModule("CustomizationStateV2")
+    local barEnabled = true
+    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        barEnabled = customizationV2:IsModuleEnabled("bar") == true
+    end
+    if not barEnabled then
+        if UI.barFrame then
+            UI.barFrame:Hide()
+        end
+        return
+    end
+
+    if UI.barFrame then
         return
     end
 
@@ -1873,7 +2064,7 @@ local function EnsureBar()
     createdBar:Hide()
     createdBar:SetClampedToScreen(false)
     createdBar:RegisterForDrag("LeftButton")
-    barFrame = createdBar
+    UI.barFrame = createdBar
 
     local function SaveBarPosition(self)
         settings.point.anchor = "CENTER"
@@ -1892,7 +2083,7 @@ local function EnsureBar()
         settings.point.y = Round(tonumber(y) or DEFAULTS.point.y)
     end
 
-    barFrame:SetScript("OnMouseDown", function(self, button)
+    UI.barFrame:SetScript("OnMouseDown", function(self, button)
         self.PreydatorWasDragging = false
         self.PreydatorHandledMapClick = false
         self.PreydatorClickStartX = nil
@@ -1921,14 +2112,14 @@ local function EnsureBar()
         end
     end)
 
-    barFrame:SetScript("OnDragStart", function(self)
+    UI.barFrame:SetScript("OnDragStart", function(self)
         if settings and not settings.locked then
             self.PreydatorWasDragging = true
             self:StartMoving()
         end
     end)
 
-    barFrame:SetScript("OnDragStop", function(self)
+    UI.barFrame:SetScript("OnDragStop", function(self)
         if not self.PreydatorWasDragging then
             return
         end
@@ -1938,7 +2129,7 @@ local function EnsureBar()
         SaveBarPosition(self)
     end)
 
-    barFrame:SetScript("OnMouseUp", function(self, button)
+    UI.barFrame:SetScript("OnMouseUp", function(self, button)
         if self.PreydatorHandledMapClick then
             self.PreydatorHandledMapClick = false
             return
@@ -1980,28 +2171,28 @@ local function EnsureBar()
         end
     end)
 
-    local bg = barFrame:CreateTexture(nil, "background")
-    bg:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-    bg:SetPoint("TOPRIGHT", barFrame, "TOPRIGHT", -FILL_INSET, -FILL_INSET)
+    local bg = UI.barFrame:CreateTexture(nil, "background")
+    bg:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+    bg:SetPoint("TOPRIGHT", UI.barFrame, "TOPRIGHT", -FILL_INSET, -FILL_INSET)
     bg:SetColorTexture(0, 0, 0, 0.6)
-    barFrame.BackgroundTexture = bg
+    UI.barFrame.BackgroundTexture = bg
 
-    barFill = barFrame:CreateTexture(nil, "artwork")
-    barFill:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-    barFill:SetSize(0, 18)
-    barFill:SetTexCoord(0, 1, 0, 1)
-    barFill:SetHorizTile(false)
-    barFill:SetVertTile(false)
-    barFill:SetColorTexture(0.85, 0.2, 0.2, 0.95)
+    UI.barFill = UI.barFrame:CreateTexture(nil, "artwork")
+    UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+    UI.barFill:SetSize(0, 18)
+    UI.barFill:SetTexCoord(0, 1, 0, 1)
+    UI.barFill:SetHorizTile(false)
+    UI.barFill:SetVertTile(false)
+    UI.barFill:SetColorTexture(0.85, 0.2, 0.2, 0.95)
 
-    barSpark = barFrame:CreateTexture(nil, "overlay")
-    barSpark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-    barSpark:SetSize(2, 18)
-    barSpark:SetColorTexture(1, 0.95, 0.75, 0.9)
-    barSpark:SetDrawLayer("OVERLAY", 3)
-    barSpark:Hide()
+    UI.barSpark = UI.barFrame:CreateTexture(nil, "overlay")
+    UI.barSpark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+    UI.barSpark:SetSize(2, 18)
+    UI.barSpark:SetColorTexture(1, 0.95, 0.75, 0.9)
+    UI.barSpark:SetDrawLayer("OVERLAY", 3)
+    UI.barSpark:Hide()
 
-    local border = CreateFrame("Frame", nil, barFrame, "BackdropTemplate")
+    local border = CreateFrame("Frame", nil, UI.barFrame, "BackdropTemplate")
     border:SetAllPoints()
     border:SetBackdrop({
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -2009,42 +2200,42 @@ local function EnsureBar()
         insets = { left = 2, right = 2, top = 2, bottom = 2 },
     })
     border:SetBackdropBorderColor(0.8, 0.2, 0.2, 0.85)
-    barBorder = border
+    UI.barBorder = border
 
-    stageText = barFrame:CreateFontString(nil, "overlay", "GameFontNormal")
-    stageText:SetPoint("BOTTOM", barFrame, "TOP", 0, 4)
-    stageText:SetJustifyH("CENTER")
-    stageText:SetText("Preydator")
+    UI.stageText = UI.barFrame:CreateFontString(nil, "overlay", "GameFontNormal")
+    UI.stageText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
+    UI.stageText:SetJustifyH("CENTER")
+    UI.stageText:SetText("Preydator")
 
-    stageSuffixText = barFrame:CreateFontString(nil, "overlay", "GameFontNormal")
-    stageSuffixText:SetPoint("BOTTOMRIGHT", barFrame, "TOPRIGHT", -2, 4)
-    stageSuffixText:SetJustifyH("RIGHT")
-    stageSuffixText:SetText("")
-    stageSuffixText:Hide()
+    UI.stageSuffixText = UI.barFrame:CreateFontString(nil, "overlay", "GameFontNormal")
+    UI.stageSuffixText:SetPoint("BOTTOMRIGHT", UI.barFrame, "TOPRIGHT", -2, 4)
+    UI.stageSuffixText:SetJustifyH("RIGHT")
+    UI.stageSuffixText:SetText("")
+    UI.stageSuffixText:Hide()
 
-    barText = barFrame:CreateFontString(nil, "overlay", "GameFontHighlightSmall")
-    barText:SetPoint("center", barFrame, "center", 0, 0)
-    barText:SetDrawLayer("OVERLAY", 9)
-    barText:SetText("0%")
+    UI.barText = UI.barFrame:CreateFontString(nil, "overlay", "GameFontHighlightSmall")
+    UI.barText:SetPoint("center", UI.barFrame, "center", 0, 0)
+    UI.barText:SetDrawLayer("OVERLAY", 9)
+    UI.barText:SetText("0%")
 
-    barAlignmentDot = barFrame:CreateTexture(nil, "OVERLAY")
-    barAlignmentDot:SetSize(6, 6)
-    barAlignmentDot:SetColorTexture(0, 1, 0, 1)
-    barAlignmentDot:SetPoint("CENTER", barFrame, "CENTER", 0, 0)
-    barAlignmentDot:SetDrawLayer("OVERLAY", 7)
-    barAlignmentDot:Hide()
+    UI.barAlignmentDot = UI.barFrame:CreateTexture(nil, "OVERLAY")
+    UI.barAlignmentDot:SetSize(6, 6)
+    UI.barAlignmentDot:SetColorTexture(0, 1, 0, 1)
+    UI.barAlignmentDot:SetPoint("CENTER", UI.barFrame, "CENTER", 0, 0)
+    UI.barAlignmentDot:SetDrawLayer("OVERLAY", 7)
+    UI.barAlignmentDot:Hide()
 
     for index = 1, MAX_TICK_MARKS do
         local pct = (index * 25)
-        local tickMark = barFrame:CreateTexture(nil, "overlay")
+        local tickMark = UI.barFrame:CreateTexture(nil, "overlay")
         tickMark:SetColorTexture(1, 1, 1, 0.35)
         tickMark:SetDrawLayer("OVERLAY", 4)
-        barTickMarks[index] = tickMark
+        UI.barTickMarks[index] = tickMark
 
-        local tickLabel = barFrame:CreateFontString(nil, "overlay", "GameFontHighlightSmall")
+        local tickLabel = UI.barFrame:CreateFontString(nil, "overlay", "GameFontHighlightSmall")
         tickLabel:SetDrawLayer("OVERLAY", 8)
         tickLabel:SetText(tostring(pct))
-        barTickLabels[index] = tickLabel
+        UI.barTickLabels[index] = tickLabel
     end
 
     ApplyBarSettings()
@@ -2305,6 +2496,26 @@ local function ExtractQuestObjectivePercent(questID)
 end
 
 UpdateBarDisplay = function()
+    local customizationV2 = Preydator:GetModule("CustomizationStateV2")
+    local barEnabled = true
+    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        barEnabled = customizationV2:IsModuleEnabled("bar") == true
+    end
+    if not barEnabled then
+        if UI.barFrame then
+            UI.barFrame:Hide()
+        end
+        RunModuleHook("OnAfterUpdateBarDisplay", {
+            shouldShowBar = false,
+            forceAmbushAlert = false,
+            forceKillStage = false,
+            hasActiveQuest = false,
+            displayPercent = 0,
+            stage = state.stage,
+        })
+        return
+    end
+
     EnsureBar()
     ApplyDefaultPreyIconVisibility()
 
@@ -2312,7 +2523,7 @@ UpdateBarDisplay = function()
     local hasActiveQuest = state.activeQuestID ~= nil
     local forceKillStage = now < (state.killStageUntil or 0)
     local forceAmbushAlert = now < (state.ambushAlertUntil or 0)
-    local isOutOfPreyZone = hasActiveQuest and state.inPreyZone ~= true
+    local isOutOfPreyZone = hasActiveQuest and state.preyZoneMapID and state.inPreyZone == false
     local onlyShowInPreyZone = settings.onlyShowInPreyZone == true
     local editModePreview = settings.showInEditMode == true and IsEditModePreviewActive()
     local shouldShow = false
@@ -2326,7 +2537,7 @@ UpdateBarDisplay = function()
     end
 
     if not shouldShow then
-        barFrame:Hide()
+        UI.barFrame:Hide()
         RunModuleHook("OnAfterUpdateBarDisplay", {
             shouldShowBar = false,
             forceAmbushAlert = forceAmbushAlert,
@@ -2338,7 +2549,7 @@ UpdateBarDisplay = function()
         return
     end
 
-    barFrame:Show()
+    UI.barFrame:Show()
 
     local stage = forceKillStage and MAX_STAGE or GetStageFromState(state.progressState)
     local pct = 0
@@ -2375,42 +2586,42 @@ UpdateBarDisplay = function()
         displayReason = "activeQuest"
     end
     local label = GetStageLabel(stage)
-    local barWidth = (barFrame and barFrame.GetWidth and barFrame:GetWidth()) or settings.width
-    local barHeight = (barFrame and barFrame.GetHeight and barFrame:GetHeight()) or settings.height
+    local barWidth = (UI.barFrame and UI.barFrame.GetWidth and UI.barFrame:GetWidth()) or settings.width
+    local barHeight = (UI.barFrame and UI.barFrame.GetHeight and UI.barFrame:GetHeight()) or settings.height
     local innerFillWidth = math.max(0, barWidth - 2 * FILL_INSET)
     local innerFillHeight = math.max(0, barHeight - 2 * FILL_INSET)
     local isVertical = settings.orientation == ORIENTATION_VERTICAL
 
-    if barFill then
+    if UI.barFill then
         local width = innerFillWidth * (pct / 100)
         local height = innerFillHeight * (pct / 100)
         local shouldHideFill = (pct <= 0) or (not hasActiveQuest and not forceKillStage and not forceAmbushAlert)
         if shouldHideFill then
-            barFill:SetWidth(0)
-            barFill:SetHeight(0)
-            barFill:Hide()
-            if barSpark then
-                barSpark:Hide()
+            UI.barFill:SetWidth(0)
+            UI.barFill:SetHeight(0)
+            UI.barFill:Hide()
+            if UI.barSpark then
+                UI.barSpark:Hide()
             end
         else
-            barFill:ClearAllPoints()
+            UI.barFill:ClearAllPoints()
             if isVertical then
-                barFill:SetWidth(innerFillWidth)
-                barFill:SetHeight(math.max(1, height))
+                UI.barFill:SetWidth(innerFillWidth)
+                UI.barFill:SetHeight(math.max(1, height))
                 if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                    barFill:SetPoint("TOPLEFT", barFrame, "TOPLEFT", FILL_INSET, -FILL_INSET)
+                    UI.barFill:SetPoint("TOPLEFT", UI.barFrame, "TOPLEFT", FILL_INSET, -FILL_INSET)
                 else
-                    barFill:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+                    UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
                 end
             else
-                barFill:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-                barFill:SetWidth(math.max(1, width))
-                barFill:SetHeight(innerFillHeight)
+                UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
+                UI.barFill:SetWidth(math.max(1, width))
+                UI.barFill:SetHeight(innerFillHeight)
             end
-            barFill:Show()
-            if barSpark and settings.showSparkLine then
+            UI.barFill:Show()
+            if UI.barSpark and settings.showSparkLine then
                 local sparkWidth = 2
-                barSpark:ClearAllPoints()
+                UI.barSpark:ClearAllPoints()
                 if isVertical then
                     local sparkY
                     if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
@@ -2423,17 +2634,17 @@ UpdateBarDisplay = function()
                     elseif pct >= 100 then
                         sparkY = barHeight - FILL_INSET - sparkWidth
                     end
-                    barSpark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", FILL_INSET, sparkY)
+                    UI.barSpark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, sparkY)
                 else
                     local sparkX = FILL_INSET + math.max(0, width - sparkWidth)
                     if pct >= 100 then
                         sparkX = barWidth - FILL_INSET - sparkWidth
                     end
-                    barSpark:SetPoint("BOTTOMLEFT", barFrame, "BOTTOMLEFT", sparkX, FILL_INSET)
+                    UI.barSpark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", sparkX, FILL_INSET)
                 end
-                barSpark:Show()
-            elseif barSpark then
-                barSpark:Hide()
+                UI.barSpark:Show()
+            elseif UI.barSpark then
+                UI.barSpark:Hide()
             end
         end
     end
@@ -2448,8 +2659,8 @@ UpdateBarDisplay = function()
     local allowStageFourMapClickFallback = settings
         and settings.disableDefaultPreyIcon == true
         and stage == MAX_STAGE
-    if barFrame and barFrame.EnableMouse then
-        barFrame:EnableMouse((allowBarDrag and true or false) or (allowStageFourMapClickFallback and true or false) or (allowEditModeClickOpen and true or false))
+    if UI.barFrame and UI.barFrame.EnableMouse then
+        UI.barFrame:EnableMouse((allowBarDrag and true or false) or (allowStageFourMapClickFallback and true or false) or (allowEditModeClickOpen and true or false))
     end
 
     local prefixText = ""
@@ -2504,14 +2715,14 @@ UpdateBarDisplay = function()
         lm = LABEL_MODE_SEPARATE
     end
     local function LabelOut(text)
-        if settings.orientation == ORIENTATION_VERTICAL and not (stageText and stageText.SetRotation) then
+        if settings.orientation == ORIENTATION_VERTICAL and not (UI.stageText and UI.stageText.SetRotation) then
             return ToVerticalText(text)
         end
         return text
     end
     if lm == LABEL_MODE_NONE then
-        stageText:SetText("") stageText:Hide()
-        if stageSuffixText then stageSuffixText:SetText("") stageSuffixText:Hide() end
+        UI.stageText:SetText("") UI.stageText:Hide()
+        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
     elseif lm == LABEL_MODE_SEPARATE then
         local boundaryVerticalMode = isVertical
             and (verticalTextSide == "left" or verticalTextSide == "right")
@@ -2529,61 +2740,61 @@ UpdateBarDisplay = function()
 
         if boundaryVerticalMode then
             if boundaryVerticalText ~= nil and boundaryVerticalText ~= "" then
-                stageText:SetText(LabelOut(boundaryVerticalText))
-                stageText:Show()
+                UI.stageText:SetText(LabelOut(boundaryVerticalText))
+                UI.stageText:Show()
             else
-                stageText:SetText("")
-                stageText:Hide()
+                UI.stageText:SetText("")
+                UI.stageText:Hide()
             end
-            if stageSuffixText then
-                stageSuffixText:SetText("")
-                stageSuffixText:Hide()
+            if UI.stageSuffixText then
+                UI.stageSuffixText:SetText("")
+                UI.stageSuffixText:Hide()
             end
         else
-            if prefixText ~= "" then stageText:SetText(LabelOut(prefixText)) stageText:Show()
-            else stageText:SetText("") stageText:Hide() end
-            if stageSuffixText then
-                if suffixText ~= "" then stageSuffixText:SetText(LabelOut(suffixText)) stageSuffixText:Show()
-                else stageSuffixText:SetText("") stageSuffixText:Hide() end
+            if prefixText ~= "" then UI.stageText:SetText(LabelOut(prefixText)) UI.stageText:Show()
+            else UI.stageText:SetText("") UI.stageText:Hide() end
+            if UI.stageSuffixText then
+                if suffixText ~= "" then UI.stageSuffixText:SetText(LabelOut(suffixText)) UI.stageSuffixText:Show()
+                else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
             end
         end
     elseif lm == LABEL_MODE_LEFT then
-        if prefixText ~= "" then stageText:SetText(LabelOut(prefixText)) stageText:Show()
-        else stageText:SetText("") stageText:Hide() end
-        if stageSuffixText then stageSuffixText:SetText("") stageSuffixText:Hide() end
+        if prefixText ~= "" then UI.stageText:SetText(LabelOut(prefixText)) UI.stageText:Show()
+        else UI.stageText:SetText("") UI.stageText:Hide() end
+        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
     elseif lm == LABEL_MODE_LEFT_COMBINED then
-        if centeredText ~= "" then stageText:SetText(LabelOut(centeredText)) stageText:Show()
-        else stageText:SetText("") stageText:Hide() end
-        if stageSuffixText then stageSuffixText:SetText("") stageSuffixText:Hide() end
+        if centeredText ~= "" then UI.stageText:SetText(LabelOut(centeredText)) UI.stageText:Show()
+        else UI.stageText:SetText("") UI.stageText:Hide() end
+        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
     elseif lm == LABEL_MODE_LEFT_SUFFIX then
-        if suffixText ~= "" then stageText:SetText(LabelOut(suffixText)) stageText:Show()
-        else stageText:SetText("") stageText:Hide() end
-        if stageSuffixText then stageSuffixText:SetText("") stageSuffixText:Hide() end
+        if suffixText ~= "" then UI.stageText:SetText(LabelOut(suffixText)) UI.stageText:Show()
+        else UI.stageText:SetText("") UI.stageText:Hide() end
+        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
     elseif lm == LABEL_MODE_RIGHT then
-        stageText:SetText("") stageText:Hide()
-        if stageSuffixText then
-            if suffixText ~= "" then stageSuffixText:SetText(LabelOut(suffixText)) stageSuffixText:Show()
-            else stageSuffixText:SetText("") stageSuffixText:Hide() end
+        UI.stageText:SetText("") UI.stageText:Hide()
+        if UI.stageSuffixText then
+            if suffixText ~= "" then UI.stageSuffixText:SetText(LabelOut(suffixText)) UI.stageSuffixText:Show()
+            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
         end
     elseif lm == LABEL_MODE_RIGHT_COMBINED then
-        stageText:SetText("") stageText:Hide()
-        if stageSuffixText then
-            if centeredText ~= "" then stageSuffixText:SetText(LabelOut(centeredText)) stageSuffixText:Show()
-            else stageSuffixText:SetText("") stageSuffixText:Hide() end
+        UI.stageText:SetText("") UI.stageText:Hide()
+        if UI.stageSuffixText then
+            if centeredText ~= "" then UI.stageSuffixText:SetText(LabelOut(centeredText)) UI.stageSuffixText:Show()
+            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
         end
     elseif lm == LABEL_MODE_RIGHT_PREFIX then
-        stageText:SetText("") stageText:Hide()
-        if stageSuffixText then
-            if prefixText ~= "" then stageSuffixText:SetText(LabelOut(prefixText)) stageSuffixText:Show()
-            else stageSuffixText:SetText("") stageSuffixText:Hide() end
+        UI.stageText:SetText("") UI.stageText:Hide()
+        if UI.stageSuffixText then
+            if prefixText ~= "" then UI.stageSuffixText:SetText(LabelOut(prefixText)) UI.stageSuffixText:Show()
+            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
         end
     else
-        if centeredText ~= "" then stageText:SetText(LabelOut(centeredText)) stageText:Show()
-        else stageText:SetText("") stageText:Hide() end
-        if stageSuffixText then stageSuffixText:SetText("") stageSuffixText:Hide() end
+        if centeredText ~= "" then UI.stageText:SetText(LabelOut(centeredText)) UI.stageText:Show()
+        else UI.stageText:SetText("") UI.stageText:Hide() end
+        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
     end
 
-    barText:SetText(string.format("%d%%", pct))
+    UI.barText:SetText(string.format("%d%%", pct))
 
     RunModuleHook("OnAfterUpdateBarDisplay", {
         shouldShowBar = true,
@@ -2605,13 +2816,13 @@ OpenOptionsPanel = function()
     EnsureOptionsPanel()
 
     if Settings and Settings.OpenToCategory then
-        if type(optionsCategoryID) == "number" then
-            Settings.OpenToCategory(optionsCategoryID)
+        if type(UI.optionsCategoryID) == "number" then
+            Settings.OpenToCategory(UI.optionsCategoryID)
             return
         end
 
-        if optionsPanel and type(optionsPanel.categoryID) == "number" then
-            Settings.OpenToCategory(optionsPanel.categoryID)
+        if UI.optionsPanel and type(UI.optionsPanel.categoryID) == "number" then
+            Settings.OpenToCategory(UI.optionsPanel.categoryID)
             return
         end
     end
@@ -2633,14 +2844,15 @@ local function ClearPreyStateAndDisplay()
     state.killStageUntil = 0
     state.lastWidgetSeenAt = 0
     state.stageSoundPlayed = {}
+    state.stageSoundAttempted = {}
     state.lastStateDebugSnapshot = nil
     state.preyTargetName = nil
     state.preyTargetDifficulty = nil
     state.ambushAlertUntil = 0
     state.lastAmbushSystemMessage = nil
 
-    if barFill then
-        barFill:SetWidth(0)
+    if UI.barFill then
+        UI.barFill:SetWidth(0)
     end
 end
 
@@ -2672,24 +2884,24 @@ local function DebugLogPreyState(origin, questID, hasWidgetData, progressState, 
 end
 
 local function GetCandidateWidgetSetIDs()
-    for index = #candidateWidgetSetIDs, 1, -1 do
-        candidateWidgetSetIDs[index] = nil
+    for index = #UI.candidateWidgetSetIDs, 1, -1 do
+        UI.candidateWidgetSetIDs[index] = nil
     end
 
     if C_UIWidgetManager and C_UIWidgetManager.GetTopCenterWidgetSetID then
-        candidateWidgetSetIDs[#candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetTopCenterWidgetSetID()
+        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetTopCenterWidgetSetID()
     end
     if C_UIWidgetManager and C_UIWidgetManager.GetObjectiveTrackerWidgetSetID then
-        candidateWidgetSetIDs[#candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetObjectiveTrackerWidgetSetID()
+        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetObjectiveTrackerWidgetSetID()
     end
     if C_UIWidgetManager and C_UIWidgetManager.GetBelowMinimapWidgetSetID then
-        candidateWidgetSetIDs[#candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetBelowMinimapWidgetSetID()
+        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetBelowMinimapWidgetSetID()
     end
     if C_UIWidgetManager and C_UIWidgetManager.GetPowerBarWidgetSetID then
-        candidateWidgetSetIDs[#candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetPowerBarWidgetSetID()
+        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetPowerBarWidgetSetID()
     end
 
-    return candidateWidgetSetIDs
+    return UI.candidateWidgetSetIDs
 end
 
 local function IsLikelyIconName(value)
@@ -3166,8 +3378,8 @@ local function FindGlobalFramesForWidgetID(widgetID, forceRefresh)
         return {}
     end
 
-    if not forceRefresh and type(targetedWidgetGlobalFrameCache[widgetID]) == "table" then
-        return targetedWidgetGlobalFrameCache[widgetID]
+    if not forceRefresh and type(UI.targetedWidgetGlobalFrameCache[widgetID]) == "table" then
+        return UI.targetedWidgetGlobalFrameCache[widgetID]
     end
 
     local matches = {}
@@ -3268,7 +3480,7 @@ local function FindGlobalFramesForWidgetID(widgetID, forceRefresh)
         scanContainerForWidgetID(container, containerKey)
     end
 
-    targetedWidgetGlobalFrameCache[widgetID] = matches
+    UI.targetedWidgetGlobalFrameCache[widgetID] = matches
     return matches
 end
 
@@ -3480,12 +3692,13 @@ local function ResetAllSettings()
 
     state.forceShowBar = settings.forceShowBar
     state.stageSoundPlayed = {}
+    state.stageSoundAttempted = {}
 
     ApplyBarSettings()
     UpdateBarDisplay()
 
-    if optionsPanel and optionsPanel.PreydatorRefreshControls then
-        optionsPanel.PreydatorRefreshControls()
+    if UI.optionsPanel and UI.optionsPanel.PreydatorRefreshControls then
+        UI.optionsPanel.PreydatorRefreshControls()
     end
 end
 
@@ -3911,7 +4124,7 @@ local function PrintInspectState(outputMode)
         and settings.disableDefaultPreyIcon == true
         and state
         and state.stage == MAX_STAGE
-    local barMouseEnabled = barFrame and barFrame.IsMouseEnabled and barFrame:IsMouseEnabled() or false
+    local barMouseEnabled = UI.barFrame and UI.barFrame.IsMouseEnabled and UI.barFrame:IsMouseEnabled() or false
     local waypointMapID, waypointX, waypointY = TryGetPreyQuestWaypoint(liveQuestID)
     local canResolveWaypoint = waypointMapID and waypointX and waypointY
 
@@ -3948,7 +4161,7 @@ local function PrintInspectState(outputMode)
     else
         add("  objective none")
     end
-    add("- bar shown=" .. tostring(barFrame and barFrame:IsShown() or false)
+    add("- bar shown=" .. tostring(UI.barFrame and UI.barFrame:IsShown() or false)
         .. " | forceShow=" .. tostring(state.forceShowBar)
         .. " | onlyShowInPreyZone=" .. tostring(settings and settings.onlyShowInPreyZone))
     add("- icon hide setting=" .. tostring(settings and settings.disableDefaultPreyIcon)
@@ -3957,15 +4170,15 @@ local function PrintInspectState(outputMode)
         .. " | suppressInZone=" .. tostring(state and state.inPreyZone == true)
         .. " | stage4MapFallback=" .. tostring(allowStageFourMapClickFallback)
         .. " | barMouseEnabled=" .. tostring(barMouseEnabled))
-    add("- bar scripts onMouseDown=" .. tostring(FrameHasScriptSafe(barFrame, "OnMouseDown"))
-        .. " | onMouseUp=" .. tostring(FrameHasScriptSafe(barFrame, "OnMouseUp")))
+    add("- bar scripts onMouseDown=" .. tostring(FrameHasScriptSafe(UI.barFrame, "OnMouseDown"))
+        .. " | onMouseUp=" .. tostring(FrameHasScriptSafe(UI.barFrame, "OnMouseUp")))
     add("- map APIs openQuestMap=" .. tostring(OpenQuestMap ~= nil)
         .. " | toggleWorldMap=" .. tostring(ToggleWorldMap ~= nil)
         .. " | openQuestDetails=" .. tostring(QuestMapFrame_OpenToQuestDetails ~= nil)
         .. " | setUserWaypoint=" .. tostring(C_Map and C_Map.SetUserWaypoint ~= nil)
         .. " | superTrack=" .. tostring(C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint ~= nil))
-    local frameWidth = barFrame and barFrame:GetWidth() or 0
-    local fillWidth = barFill and barFill:GetWidth() or 0
+    local frameWidth = UI.barFrame and UI.barFrame:GetWidth() or 0
+    local fillWidth = UI.barFill and UI.barFill:GetWidth() or 0
     local fillPct = 0
     if frameWidth and frameWidth > 0 then
         fillPct = (fillWidth / frameWidth) * 100
@@ -3983,8 +4196,8 @@ local function PrintInspectState(outputMode)
         .. " y=" .. tostring(savedPoint.y))
 
     local livePoint, liveRelativeTo, liveRelativePoint, liveX, liveY = nil, nil, nil, nil, nil
-    if barFrame and barFrame.GetPoint then
-        livePoint, liveRelativeTo, liveRelativePoint, liveX, liveY = barFrame:GetPoint(1)
+    if UI.barFrame and UI.barFrame.GetPoint then
+        livePoint, liveRelativeTo, liveRelativePoint, liveX, liveY = UI.barFrame:GetPoint(1)
     end
     local liveRelativeName = "nil"
     if liveRelativeTo == UIParent then
@@ -3999,10 +4212,10 @@ local function PrintInspectState(outputMode)
         .. " x=" .. tostring(liveX)
         .. " y=" .. tostring(liveY))
 
-    local frameScale = barFrame and barFrame.GetScale and barFrame:GetScale() or 1
-    local frameEffectiveScale = barFrame and barFrame.GetEffectiveScale and barFrame:GetEffectiveScale() or 1
-    local frameCenterX = barFrame and barFrame.GetCenter and select(1, barFrame:GetCenter()) or nil
-    local frameCenterY = barFrame and barFrame.GetCenter and select(2, barFrame:GetCenter()) or nil
+    local frameScale = UI.barFrame and UI.barFrame.GetScale and UI.barFrame:GetScale() or 1
+    local frameEffectiveScale = UI.barFrame and UI.barFrame.GetEffectiveScale and UI.barFrame:GetEffectiveScale() or 1
+    local frameCenterX = UI.barFrame and UI.barFrame.GetCenter and select(1, UI.barFrame:GetCenter()) or nil
+    local frameCenterY = UI.barFrame and UI.barFrame.GetCenter and select(2, UI.barFrame:GetCenter()) or nil
     local parentCenterX = UIParent and UIParent.GetCenter and select(1, UIParent:GetCenter()) or nil
     local parentCenterY = UIParent and UIParent.GetCenter and select(2, UIParent:GetCenter()) or nil
     local centerDX = (frameCenterX and parentCenterX) and (frameCenterX - parentCenterX) or nil
@@ -4040,8 +4253,8 @@ local function PrintInspectState(outputMode)
             .. " dy=" .. tostring(entry.dy))
     end
 
-    add("- frame local=" .. tostring(barFrame) .. " | frame global=" .. tostring(_G.PreydatorProgressBar)
-        .. " | same=" .. tostring(barFrame ~= nil and _G.PreydatorProgressBar ~= nil and barFrame == _G.PreydatorProgressBar))
+    add("- frame local=" .. tostring(UI.barFrame) .. " | frame global=" .. tostring(_G.PreydatorProgressBar)
+        .. " | same=" .. tostring(UI.barFrame ~= nil and _G.PreydatorProgressBar ~= nil and UI.barFrame == _G.PreydatorProgressBar))
 
     if C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID and C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo then
         for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
@@ -4263,9 +4476,11 @@ local function ResetStateForNewQuest(questID)
         state.progressState = nil
         state.progressPercent = nil
         state.stageSoundPlayed = {}
+        state.stageSoundAttempted = {}
         state.stage = 1
         state.preyZoneName, state.preyZoneMapID = GetPreyZoneInfo(questID)
-        state.inPreyZone = IsPlayerInPreyZone(state.preyZoneMapID)
+        state.inPreyZone = nil
+        RefreshInPreyZoneStatus(questID, true)
         state.preyTooltipText = nil
         state.preyTargetName, state.preyTargetDifficulty = ExtractPreyTargetFromQuestTitle(questID)
         state.ambushAlertUntil = 0
@@ -4274,10 +4489,53 @@ local function ResetStateForNewQuest(questID)
 end
 
 local function UpdatePreyState()
-    local questID = GetCurrentActivePreyQuest()
-    local hasActiveQuest = IsValidQuestID(questID)
-    local newProgressState, tooltipText, newProgressPercent = FindPreyWidgetProgressState(hasActiveQuest and questID or nil)
     local now = GetTime and GetTime() or 0
+    local questID = GetCurrentActivePreyQuestCached(0)
+    local hasActiveQuest = IsValidQuestID(questID)
+    local forceKillStage = (state.killStageUntil or 0) > now
+    local forceAmbushAlert = (state.ambushAlertUntil or 0) > now
+
+    if not hasActiveQuest and not forceKillStage then
+        local endingQuestID = state.activeQuestID or questID
+        local completedTransition = tonumber(state.stage) == MAX_STAGE
+        if endingQuestID and endingQuestID > 0 then
+            if completedTransition ~= true or state.lastNotifiedPreyEndQuestID ~= endingQuestID then
+                RunModuleHook("OnPreyQuestEnded", {
+                    questID = endingQuestID,
+                    completed = completedTransition == true,
+                    stage = tonumber(state.stage),
+                    difficulty = state.preyTargetDifficulty,
+                })
+                if completedTransition == true then
+                    state.lastNotifiedPreyEndQuestID = endingQuestID
+                end
+            end
+        end
+        DebugLogPreyState("clear", questID, false, state.progressState, state.progressPercent, state.inPreyZone)
+        ClearPreyStateAndDisplay()
+        ApplyDefaultPreyIconVisibility()
+        UpdateBarDisplay()
+        return
+    end
+
+    if hasActiveQuest then
+        ResetStateForNewQuest(questID)
+        RefreshInPreyZoneStatus(questID, false)
+
+        -- While out of prey zone, skip expensive widget/objective scans.
+        if state.preyZoneMapID and state.inPreyZone == false and not forceKillStage and not forceAmbushAlert then
+            state.lastPercentSource = "none"
+            state.preyTooltipText = nil
+            ApplyDefaultPreyIconVisibility()
+            UpdateBarDisplay()
+            return
+        end
+    end
+
+    local newProgressState, tooltipText, newProgressPercent = nil, nil, nil
+    if hasActiveQuest then
+        newProgressState, tooltipText, newProgressPercent = FindPreyWidgetProgressState(questID)
+    end
     local hasWidgetData = newProgressState ~= nil
 
     if hasWidgetData then
@@ -4292,7 +4550,7 @@ local function UpdatePreyState()
     end
 
     local questStillActive = IsQuestStillActive(questID)
-    if (not hasActiveQuest and not ((state.killStageUntil or 0) > now)) or questCompleted or (hasActiveQuest and not questStillActive and not hasWidgetData) then
+    if questCompleted or (hasActiveQuest and not questStillActive and not hasWidgetData) then
         local endingQuestID = effectiveQuestID or state.activeQuestID or questID
         local completedTransition = questCompleted or (((not hasActiveQuest) or (not questStillActive)) and tonumber(state.stage) == MAX_STAGE)
         if endingQuestID and endingQuestID > 0 then
@@ -4315,11 +4573,8 @@ local function UpdatePreyState()
         return
     end
 
-    ResetStateForNewQuest(effectiveQuestID)
     if hasWidgetData then
         state.inPreyZone = true
-    else
-        state.inPreyZone = IsPlayerInPreyZone(state.preyZoneMapID)
     end
 
     local oldProgressState = state.progressState
@@ -4368,7 +4623,7 @@ local function UpdatePreyState()
         return
     end
 
-    if state.stageSoundPlayed[MAX_STAGE] then
+    if state.stageSoundPlayed[MAX_STAGE] or state.stageSoundAttempted[MAX_STAGE] then
         ApplyDefaultPreyIconVisibility()
         UpdateBarDisplay()
         return
@@ -4399,15 +4654,17 @@ local function OnAddonLoaded()
     state.forceShowBar = settings.forceShowBar
 
     frame:RegisterEvent("PLAYER_LOGIN")
-    frame:RegisterEvent("QUEST_LOG_UPDATE")
-    frame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
     frame:RegisterEvent("UPDATE_UI_WIDGET")
+    frame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
     frame:RegisterEvent("QUEST_TURNED_IN")
     frame:RegisterEvent("CHAT_MSG_SYSTEM")
     frame:RegisterEvent("CHAT_MSG_MONSTER_SAY")
     frame:RegisterEvent("CHAT_MSG_MONSTER_YELL")
     frame:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
     frame:RegisterEvent("RAID_BOSS_EMOTE")
+    frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
+    frame:RegisterEvent("QUEST_DETAIL")
+    frame:RegisterEvent("QUEST_ACCEPTED")
     frame:RegisterEvent("ZONE_CHANGED")
     frame:RegisterEvent("ZONE_CHANGED_INDOORS")
     frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
@@ -4566,8 +4823,8 @@ local function AddColorSwatch(parent, x, y, getter, setter, allowAlpha)
             return
         end
 
-        colorPickerSessionCounter = colorPickerSessionCounter + 1
-        local sessionID = colorPickerSessionCounter
+        UI.colorPickerSessionCounter = UI.colorPickerSessionCounter + 1
+        local sessionID = UI.colorPickerSessionCounter
         ColorPickerFrame.preydatorSessionID = sessionID
 
         local start = getter()
@@ -4655,15 +4912,15 @@ EnsureOptionsPanel = function()
     if settingsModule and settingsModule.EnsureOptionsPanel then
         local panelRef, categoryID = settingsModule:EnsureOptionsPanel()
         if panelRef then
-            optionsPanel = panelRef
+            UI.optionsPanel = panelRef
         end
         if categoryID ~= nil then
-            optionsCategoryID = categoryID
+            UI.optionsCategoryID = categoryID
         end
         return
     end
 
-    if optionsPanel then
+    if UI.optionsPanel then
         return
     end
 
@@ -4679,8 +4936,8 @@ EnsureOptionsPanel = function()
     content:SetSize(760, 900)
     scrollFrame:SetScrollChild(content)
 
-    optionsScrollFrame = scrollFrame
-    optionsContentFrame = content
+    UI.optionsScrollFrame = scrollFrame
+    UI.optionsContentFrame = content
     panel = content
 
     NormalizeLabelSettings()
@@ -5155,6 +5412,7 @@ EnsureOptionsPanel = function()
         button:SetText(text)
         button:SetScript("OnClick", function()
             state.stageSoundPlayed[stageIndex] = nil
+            state.stageSoundAttempted[stageIndex] = nil
             local path = ResolveStageSoundPath(stageIndex)
             if not path then
                 print("Preydator: No stage " .. stageIndex .. " sound configured.")
@@ -5182,14 +5440,14 @@ EnsureOptionsPanel = function()
         local category = Settings.RegisterCanvasLayoutCategory(panelRoot, "Preydator", "Preydator")
         Settings.RegisterAddOnCategory(category)
         if type(category) == "table" then
-            optionsCategoryID = category.ID or (category.GetID and category:GetID())
-            panelRoot.categoryID = optionsCategoryID
+            UI.optionsCategoryID = category.ID or (category.GetID and category:GetID())
+            panelRoot.categoryID = UI.optionsCategoryID
         end
     elseif _G.InterfaceOptions_AddCategory then
         _G.InterfaceOptions_AddCategory(panelRoot)
     end
 
-    optionsPanel = panelRoot
+    UI.optionsPanel = panelRoot
 end
 
 Preydator.Constants = {
@@ -5275,6 +5533,12 @@ Preydator.API = {
     AddSoundFileName = AddSoundFileName,
     RemoveSoundFileName = RemoveSoundFileName,
     ResolveStageSoundPath = ResolveStageSoundPath,
+    ResolveAmbushSoundPath = function()
+        return ResolveAmbushAlertSoundPath()
+    end,
+    PlayTestSound = function(path)
+        return TryPlaySound(path, true)
+    end,
     TryPlayStageSound = function(stageIndex, force)
         return TryPlayStageSound(stageIndex, force)
     end,
@@ -5283,13 +5547,13 @@ Preydator.API = {
     end,
     OpenLegacyOptionsPanel = function()
         if Settings and Settings.OpenToCategory then
-            if type(optionsCategoryID) == "number" then
-                Settings.OpenToCategory(optionsCategoryID)
+            if type(UI.optionsCategoryID) == "number" then
+                Settings.OpenToCategory(UI.optionsCategoryID)
                 return true
             end
 
-            if optionsPanel and type(optionsPanel.categoryID) == "number" then
-                Settings.OpenToCategory(optionsPanel.categoryID)
+            if UI.optionsPanel and type(UI.optionsPanel.categoryID) == "number" then
+                Settings.OpenToCategory(UI.optionsPanel.categoryID)
                 return true
             end
         end
@@ -5396,7 +5660,7 @@ local function HandleSlashCommand(message)
         return
     end
 
-    print("Preydator commands: options | show | hide | toggle | mem | debug <on|off|show|clear>")
+    print("Preydator commands: options | show | hide | toggle | mem | debug <on|off|show|clear> | inspect[ bug|both] | inspectquest [questID] [bug|both]")
 end
 
 frame:SetScript("OnEvent", function(_, event, arg1, arg2)
@@ -5411,12 +5675,38 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         return
     end
 
-    RunModuleHook("OnEvent", event, arg1, arg2)
+    if event == "PLAYER_LOGIN"
+        or event == "PLAYER_ENTERING_WORLD"
+        or event == "ZONE_CHANGED"
+        or event == "ZONE_CHANGED_INDOORS"
+        or event == "ZONE_CHANGED_NEW_AREA" then
+        state.zoneCacheDirty = true
+    end
+
+    -- Gate module fanout for noisy UI widget events when no prey context exists
+    local isNoisyEvent = event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS"
+    local now = GetTime and GetTime() or 0
+    local livePreyQuestID = GetCurrentActivePreyQuestCached(isNoisyEvent and ACTIVE_PREY_QUEST_CACHE_SECONDS or 0)
+    local hasPreyContext = state.activeQuestID or (now < (state.killStageUntil or 0))
+    local outOfZoneQuestIdle = IsValidQuestID(state.activeQuestID)
+        and state.inPreyZone ~= true
+        and not (now < (state.killStageUntil or 0))
+        and not (now < (state.ambushAlertUntil or 0))
+    if not (isNoisyEvent and (not hasPreyContext or outOfZoneQuestIdle)) then
+        RunModuleHook("OnEvent", event, arg1, arg2)
+    end
 
     if event == "PLAYER_LOGIN" then
-        EnsureBar()
-        ApplyBarSettings()
-        UpdateBarDisplay()
+        local custV2 = Preydator:GetModule("CustomizationStateV2")
+        local barEnabled = true
+        if custV2 and type(custV2.IsModuleEnabled) == "function" then
+            barEnabled = custV2:IsModuleEnabled("bar") == true
+        end
+        if barEnabled then
+            EnsureBar()
+            ApplyBarSettings()
+            UpdateBarDisplay()
+        end
         return
     end
 
@@ -5427,6 +5717,10 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         return
     end
 
+    if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" or event == "QUEST_DETAIL" or event == "QUEST_ACCEPTED" then
+        ArmQuestListenBurst()
+    end
+
     if event == "QUEST_TURNED_IN" and state.activeQuestID and arg1 == state.activeQuestID then
         state.killStageUntil = (GetTime and GetTime() or 0) + 8
         state.progressState = PREY_PROGRESS_FINAL
@@ -5434,10 +5728,37 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         UpdateBarDisplay()
     end
 
+    if not (((state.killStageUntil or 0) > now)
+        or ((state.ambushAlertUntil or 0) > now)
+        or ((state.questListenUntil or 0) > now)
+        or IsValidQuestID(state.activeQuestID)
+        or IsValidQuestID(livePreyQuestID)) then
+        return
+    end
+
+    if isNoisyEvent
+        and IsValidQuestID(state.activeQuestID)
+        and state.inPreyZone ~= true
+        and not ((state.killStageUntil or 0) > now)
+        and not ((state.ambushAlertUntil or 0) > now) then
+        return
+    end
+
     UpdatePreyState()
 end)
 
 frame:SetScript("OnUpdate", function(_, elapsed)
+    local now = GetTime and GetTime() or 0
+    local livePreyQuestID = GetCurrentActivePreyQuestCached(ACTIVE_PREY_QUEST_CACHE_SECONDS)
+    if not (((state.killStageUntil or 0) > now)
+        or ((state.ambushAlertUntil or 0) > now)
+        or ((state.questListenUntil or 0) > now)
+        or IsValidQuestID(state.activeQuestID)
+        or IsValidQuestID(livePreyQuestID)) then
+        state.elapsedSinceUpdate = 0
+        return
+    end
+
     state.elapsedSinceUpdate = (state.elapsedSinceUpdate or 0) + (elapsed or 0)
     if state.elapsedSinceUpdate < UPDATE_INTERVAL_SECONDS then
         return

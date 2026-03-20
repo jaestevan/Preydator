@@ -7,11 +7,33 @@ end
 
 local C_QuestLog = _G.C_QuestLog
 local C_Map = _G.C_Map
+local C_TaskQuest = _G.C_TaskQuest
 local geterrorhandler = _G.geterrorhandler
 local GetTime = _G.GetTime
 local GetZoneText = _G.GetZoneText
+local GetQuestLink = _G.GetQuestLink
 
-local function SendToErrorHandler(reportText)
+local function SafeValue(value)
+    if value == nil then
+        return "nil"
+    end
+    return tostring(value)
+end
+
+local function FormatTablePairs(tbl)
+    if type(tbl) ~= "table" then
+        return SafeValue(tbl)
+    end
+
+    local parts = {}
+    for key, value in pairs(tbl) do
+        parts[#parts + 1] = tostring(key) .. "=" .. SafeValue(value)
+    end
+    table.sort(parts)
+    return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+local function SendToErrorHandler(reportText, headerText)
     if type(reportText) ~= "string" or reportText == "" then
         return false, "empty report"
     end
@@ -25,7 +47,7 @@ local function SendToErrorHandler(reportText)
         return false, "error handler unavailable"
     end
 
-    local header = "Preydator Inspect Report"
+    local header = type(headerText) == "string" and headerText ~= "" and headerText or "Preydator Inspect Report"
     local chunkSize = 1800
     local length = #reportText
     local chunks = math.max(1, math.ceil(length / chunkSize))
@@ -41,6 +63,107 @@ local function SendToErrorHandler(reportText)
     end
 
     return true, "sent"
+end
+
+local function BuildQuestInspectReport(requestedQuestID)
+    local lines = {}
+    local function add(line)
+        lines[#lines + 1] = tostring(line or "")
+    end
+
+    local state = (type(Preydator.GetState) == "function") and Preydator.GetState() or {}
+    local liveQuestID = (C_QuestLog and C_QuestLog.GetActivePreyQuest) and tonumber(C_QuestLog.GetActivePreyQuest()) or nil
+    local questID = tonumber(requestedQuestID) or liveQuestID or tonumber(state.activeQuestID)
+
+    local now = GetTime and GetTime() or 0
+    local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
+    local playerMapName = nil
+    if playerMapID and C_Map and C_Map.GetMapInfo then
+        local mapInfo = C_Map.GetMapInfo(playerMapID)
+        playerMapName = mapInfo and mapInfo.name or nil
+    end
+
+    add("Preydator Quest Inspect (module)")
+    add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. SafeValue(playerMapID) .. " | playerMap=" .. SafeValue(playerMapName))
+    add("- requestedQuestID=" .. SafeValue(requestedQuestID) .. " | livePreyQuestID=" .. SafeValue(liveQuestID) .. " | trackedQuestID=" .. SafeValue(state.activeQuestID) .. " | inspectQuestID=" .. SafeValue(questID))
+
+    if not questID or questID <= 0 then
+        add("- No valid quest ID available to inspect.")
+        local reportText = table.concat(lines, "\n")
+        _G.PreydatorLastQuestInspectReport = reportText
+        return lines, reportText
+    end
+
+    local logIndex = nil
+    if C_QuestLog and type(C_QuestLog.GetLogIndexForQuestID) == "function" then
+        logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
+    end
+
+    local titleForQuestID = nil
+    if C_QuestLog and type(C_QuestLog.GetTitleForQuestID) == "function" then
+        local titleInfo = C_QuestLog.GetTitleForQuestID(questID)
+        if type(titleInfo) == "table" then
+            titleForQuestID = titleInfo.title
+        else
+            titleForQuestID = titleInfo
+        end
+    end
+
+    local questLink = nil
+    if type(GetQuestLink) == "function" then
+        questLink = GetQuestLink(questID)
+    end
+
+    local questZoneMapID = nil
+    if C_TaskQuest and type(C_TaskQuest.GetQuestZoneID) == "function" then
+        questZoneMapID = C_TaskQuest.GetQuestZoneID(questID)
+    end
+
+    local questZoneName = nil
+    if questZoneMapID and C_Map and type(C_Map.GetMapInfo) == "function" then
+        local zoneInfo = C_Map.GetMapInfo(questZoneMapID)
+        questZoneName = zoneInfo and zoneInfo.name or nil
+    end
+
+    add("- basic | logIndex=" .. SafeValue(logIndex) .. " | title=" .. SafeValue(titleForQuestID) .. " | link=" .. SafeValue(questLink))
+    add("- zoneHint | taskQuestMapID=" .. SafeValue(questZoneMapID) .. " | taskQuestZone=" .. SafeValue(questZoneName) .. " | state.preyZoneMapID=" .. SafeValue(state.preyZoneMapID) .. " | state.preyZoneName=" .. SafeValue(state.preyZoneName) .. " | state.inPreyZone=" .. SafeValue(state.inPreyZone))
+
+    if C_QuestLog then
+        if type(C_QuestLog.IsOnQuest) == "function" then
+            add("- flags | isOnQuest=" .. SafeValue(C_QuestLog.IsOnQuest(questID)))
+        end
+        if type(C_QuestLog.IsQuestFlaggedCompleted) == "function" then
+            add("- flags | isFlaggedCompleted=" .. SafeValue(C_QuestLog.IsQuestFlaggedCompleted(questID)))
+        end
+    end
+
+    if logIndex and C_QuestLog and type(C_QuestLog.GetInfo) == "function" then
+        local info = C_QuestLog.GetInfo(logIndex)
+        add("- GetInfo(" .. tostring(logIndex) .. ")=" .. FormatTablePairs(info))
+    else
+        add("- GetInfo unavailable: no logIndex")
+    end
+
+    if C_QuestLog and type(C_QuestLog.GetQuestTagInfo) == "function" then
+        local tagInfo = C_QuestLog.GetQuestTagInfo(questID)
+        add("- GetQuestTagInfo=" .. FormatTablePairs(tagInfo))
+    end
+
+    if C_QuestLog and type(C_QuestLog.GetQuestObjectives) == "function" then
+        local objectives = C_QuestLog.GetQuestObjectives(questID)
+        if type(objectives) == "table" and #objectives > 0 then
+            add("- objectives count=" .. tostring(#objectives))
+            for idx, obj in ipairs(objectives) do
+                add("  - [" .. tostring(idx) .. "] " .. FormatTablePairs(obj))
+            end
+        else
+            add("- objectives count=0")
+        end
+    end
+
+    local reportText = table.concat(lines, "\n")
+    _G.PreydatorLastQuestInspectReport = reportText
+    return lines, reportText
 end
 
 local function BuildInspectReport()
@@ -150,25 +273,36 @@ end
 local DebugInspectModule = {}
 
 function DebugInspectModule:OnSlashCommand(text, rest)
-    if text ~= "inspect" and text ~= "inspectbug" and text ~= "inspectbugsack" and text ~= "inspectboth" then
+    if text ~= "inspect" and text ~= "inspectbug" and text ~= "inspectbugsack" and text ~= "inspectbs" and text ~= "inspectboth"
+        and text ~= "inspectquest" and text ~= "inspectquestbug" and text ~= "inspectquestbs" and text ~= "inspectquestboth"
+        and text ~= "qinspect" then
         return false
     end
 
+    local isQuestInspect = (text == "inspectquest" or text == "inspectquestbug" or text == "inspectquestbs" or text == "inspectquestboth" or text == "qinspect")
+
     local mode = "chat"
-    if text == "inspectbug" or text == "inspectbugsack" then
+    if text == "inspectbug" or text == "inspectbugsack" or text == "inspectbs" or text == "inspectquestbug" or text == "inspectquestbs" then
         mode = "bugsack"
-    elseif text == "inspectboth" then
+    elseif text == "inspectboth" or text == "inspectquestboth" then
         mode = "both"
     else
         local inspectMode = string.lower((rest or ""):match("^%s*(.-)%s*$"))
-        if inspectMode == "bug" or inspectMode == "bugsack" then
+        if inspectMode == "bug" or inspectMode == "bugsack" or inspectMode == "bs" then
             mode = "bugsack"
         elseif inspectMode == "both" then
             mode = "both"
         end
     end
 
-    local lines, reportText = BuildInspectReport()
+    local lines, reportText
+    if isQuestInspect then
+        local questToken = tostring((rest or ""):match("^%s*(%S+)") or "")
+        local requestedQuestID = tonumber(questToken)
+        lines, reportText = BuildQuestInspectReport(requestedQuestID)
+    else
+        lines, reportText = BuildInspectReport()
+    end
 
     if mode == "chat" or mode == "both" then
         for _, line in ipairs(lines) do
@@ -177,15 +311,24 @@ function DebugInspectModule:OnSlashCommand(text, rest)
     end
 
     if mode == "bugsack" or mode == "both" then
-        local sent, reason = SendToErrorHandler(reportText)
+        local header = isQuestInspect and "Preydator Quest Inspect Report" or "Preydator Inspect Report"
+        local sent, reason = SendToErrorHandler(reportText, header)
         if sent then
-            print("Preydator: Inspect report sent to BugSack via error handler (debug module).")
+            if isQuestInspect then
+                print("Preydator: Quest inspect report sent to BugSack via error handler (debug module).")
+            else
+                print("Preydator: Inspect report sent to BugSack via error handler (debug module).")
+            end
         else
             print("Preydator: Could not send inspect report to BugSack: " .. tostring(reason))
         end
     end
 
-    print("Preydator: Inspect report cached in PreydatorLastInspectReport (debug module).")
+    if isQuestInspect then
+        print("Preydator: Quest inspect report cached in PreydatorLastQuestInspectReport (debug module).")
+    else
+        print("Preydator: Inspect report cached in PreydatorLastInspectReport (debug module).")
+    end
     return true
 end
 

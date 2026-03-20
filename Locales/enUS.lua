@@ -226,8 +226,8 @@
   L["Preydator Currency"]        = ""
   L["Preydator Warband"]         = ""
   L["Currency Tracker"]          = ""
-  L["Preydator Updates: New in 1.7.0"] = ""
-  L["WHATS_NEW_BODY"]            = "Tracking updates have arrived.\n\n- Hunt Table tracking has been updated for better reliability and rewards visibility\n- Warband tracking has been updated with improved prey progress and layout handling\n- Currency tracking continues with tracked-currency filtering and layout/theme controls\n\nHunt Tracker is ON by default for new installs. Currency and Warband windows still default to OFF and can be enabled anytime from the Currencies options page or minimap icon."
+  L["Preydator Updates: New in 2.0.0"] = ""
+  L["WHATS_NEW_BODY"]            = "Preydator 2.0.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."
   L["Got It"]                    = ""
   L["Open Settings"]             = ""
   L["Toggle Tracker"]            = ""
@@ -267,6 +267,7 @@
   L["Adv"]       = ""
   L["Vet"]       = ""
   L["Champ"]     = ""
+  L["N/H/Ni"]    = ""   -- Difficulty abbreviation (Normal/Hard/Nightmare); translators may provide their own
 
 ---- Warband dynamic row labels
   L["Total"]     = ""
@@ -276,6 +277,23 @@
 
 ---- Currency tracker summary format
   L["Normal %d | Hard %d | Nightmare %s"] = ""
+
+---- Modules page
+  L["Module Status"]                                                                                    = ""
+  L["Bar Module"]                                                                                       = ""
+  L["Controls the main prey progress bar display and behavior."]                                       = ""
+  L["Sounds Module"]                                                                                    = ""
+  L["Controls stage sounds and ambush audio settings."]                                                = ""
+  L["Currency Module"]                                                                                  = ""
+  L["Controls the currency tracker panel and currency displays."]                                      = ""
+  L["Hunt Table Module"]                                                                               = ""
+  L["Controls hunt table data, sorting, and panel features."]                                          = ""
+  L["Warband Module"]                                                                                   = ""
+  L["Controls the warband currency panel and roster view."]                                            = ""
+  L["Achievement Module"]                                                                              = ""
+  L["Coming soon: achievement tracking is not available yet."]                                         = ""
+  L["Reload"]                                                                                           = ""
+  L["Module changes require a reload to fully apply. Achievement module remains disabled until it is released."] = ""
 
 ---- Minimap / LDB tooltip
   L["Left Click: Toggle Currency Window"]  = ""
@@ -297,4 +315,4 @@ L["HINT_AUDIO_SLIDER"] = "Slider values can be dragged or typed directly. Custom
 L["HINT_ADVANCED_NOTES"] = "Existing installs keep their current saved values. New settings are only applied when a key is missing in PreydatorDB. This panel replaces the old long-form options page but uses the same database. The Inspect feature is compatible with BugSack."
 L["HINT_PANEL_SUBTITLE"] = "Tabbed options layout with two-column pages. Slider values can be dragged or typed directly."
 L["HINT_EDITMODE_SUBTITLE"] = "Quick layout controls while Blizzard Edit Mode is open. Full Options can be found in Options > Addons > Preydator."
-L["WHATS_NEW_BODY"] = "Tracking updates have arrived.\n\n- Hunt Table tracking has been updated for better reliability and rewards visibility\n- Warband tracking has been updated with improved prey progress and layout handling\n- Currency tracking continues with tracked-currency filtering and layout/theme controls\n\nHunt Tracker is ON by default for new installs. Currency and Warband windows still default to OFF and can be enabled anytime from the Currencies options page or minimap icon."
+L["WHATS_NEW_BODY"] = "Preydator 2.0.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."

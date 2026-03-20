@@ -1,4 +1,4 @@
----@diagnostic disable
+﻿---@diagnostic disable
 
 local _, addonTable = ...
 local Preydator = _G.Preydator or addonTable
@@ -74,6 +74,9 @@ local lastObservedPreyQuestID = nil
 local lastObservedPreyStage = nil
 local lastAvailabilityNotifyKey = nil
 local panelRowHeight = 52
+local panelScrollViewport
+local panelScrollContent
+local panelScrollBar
 local availabilityCache = {
     normal = 0,
     hard = 0,
@@ -82,11 +85,51 @@ local availabilityCache = {
 }
 local availabilityTouched = false
 local huntInteractionActive = false
+local questZoneCache = {}
+local questCoords = {}
+local cachedAdventureMapID = nil
+local queueDebounceUntil = 0
+local SNAPSHOT_QUEUE_DEBOUNCE_SECONDS = 0.15
 
 local HandleInteractionSnapshot
 local QueueInteractionSnapshotPasses
 local HidePanel
 local GetSettings
+local huntEventFrame
+local noisyEventsRegistered = false
+local IsMissionFrameVisible
+local IsOptionsPreviewVisible
+local HasActivePreyQuest
+
+local function SetNoisyEventSubscriptions(enabled)
+    if not huntEventFrame then
+        return
+    end
+
+    local shouldEnable = enabled == true
+    if shouldEnable == noisyEventsRegistered then
+        return
+    end
+
+    noisyEventsRegistered = shouldEnable
+    if shouldEnable then
+        huntEventFrame:RegisterEvent("QUEST_LOG_UPDATE")
+        huntEventFrame:RegisterEvent("UPDATE_UI_WIDGET")
+        huntEventFrame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
+    else
+        huntEventFrame:UnregisterEvent("QUEST_LOG_UPDATE")
+        huntEventFrame:UnregisterEvent("UPDATE_UI_WIDGET")
+        huntEventFrame:UnregisterEvent("UPDATE_ALL_UI_WIDGETS")
+    end
+end
+
+local function SyncNoisyEventSubscriptions()
+    local enabled = IsMissionFrameVisible()
+        or huntInteractionActive
+        or IsOptionsPreviewVisible()
+        or HasActivePreyQuest()
+    SetNoisyEventSubscriptions(enabled)
+end
 
 local function SafeToString(value)
     local ok, result = pcall(tostring, value)
@@ -124,6 +167,23 @@ local function GetGossipOptionsSafe()
 end
 
 local function IsInRestrictedInstance()
+    local zoneGate = Preydator and Preydator.GetModule and Preydator:GetModule("ZoneGateV2")
+    local gateFn = zoneGate and zoneGate.IsInInstance
+    if type(gateFn) == "function" then
+        local ok, inInstance, instanceType = pcall(gateFn, zoneGate)
+        if ok then
+            if not inInstance then
+                return false
+            end
+            return instanceType == "pvp"
+                or instanceType == "arena"
+                or instanceType == "party"
+                or instanceType == "raid"
+                or instanceType == "scenario"
+                or instanceType == "delve"
+        end
+    end
+
     if type(IsInInstance) ~= "function" then
         return false
     end
@@ -139,9 +199,12 @@ local function IsInRestrictedInstance()
         or instanceType == "delve"
 end
 
-local function IsOptionsPreviewVisible()
+IsOptionsPreviewVisible = function()
     local settings = GetSettings()
-    if not settings or settings.huntScannerPreviewInOptions ~= true then
+    if not settings then
+        return false
+    end
+    if settings.huntScannerPreviewInOptions ~= true and settings.themeEditorPreviewInOptions ~= true then
         return false
     end
 
@@ -155,7 +218,7 @@ local function BuildPreviewRows()
         {
             questID = nil,
             title = L["Preview: Normal Hunt"],
-            reward = "1,250 " .. L["Experience"] .. " | 45 Anguish | Preview Cache Reward",
+            reward = "1,250 " .. L["Experience"] .. " | 50 Anguish | Preview Cache Reward",
             canAccept = false,
         },
         {
@@ -183,6 +246,8 @@ local THEME_PRESETS = {
         title = { 0.12, 0.10, 0.08, 1.00 },
         text = { 0.10, 0.09, 0.07, 1.00 },
         muted = { 0.28, 0.25, 0.21, 1.00 },
+        season = { 0.13, 0.34, 0.67, 1.00 },
+        fontKey = "frizqt",
     },
     brown = {
         section = { 0.08, 0.06, 0.03, 0.92 },
@@ -193,6 +258,8 @@ local THEME_PRESETS = {
         title = { 1.00, 0.82, 0.00, 1.00 },
         text = { 1.00, 1.00, 1.00, 1.00 },
         muted = { 0.74, 0.70, 0.60, 1.00 },
+        season = { 0.60, 0.80, 1.00, 1.00 },
+        fontKey = "frizqt",
     },
     dark = {
         section = { 0.07, 0.07, 0.09, 0.92 },
@@ -203,8 +270,85 @@ local THEME_PRESETS = {
         title = { 1.00, 0.82, 0.00, 1.00 },
         text = { 1.00, 1.00, 1.00, 1.00 },
         muted = { 0.65, 0.65, 0.70, 1.00 },
+        season = { 0.60, 0.80, 1.00, 1.00 },
+        fontKey = "frizqt",
+    },
+    deuteranopia = {
+        section = { 0.06, 0.07, 0.14, 0.92 },
+        row = { 0.10, 0.12, 0.22, 0.92 },
+        rowAlt = { 0.08, 0.09, 0.17, 0.92 },
+        border = { 0.90, 0.60, 0.10, 0.95 },
+        header = { 0.14, 0.16, 0.30, 1.00 },
+        title = { 1.00, 0.74, 0.00, 1.00 },
+        text = { 1.00, 1.00, 1.00, 1.00 },
+        muted = { 0.65, 0.68, 0.84, 1.00 },
+        season = { 0.35, 0.65, 1.00, 1.00 },
+        fontKey = "frizqt",
+    },
+    protanopia = {
+        section = { 0.03, 0.10, 0.13, 0.92 },
+        row = { 0.06, 0.16, 0.20, 0.92 },
+        rowAlt = { 0.04, 0.12, 0.16, 0.92 },
+        border = { 0.00, 0.72, 0.82, 0.95 },
+        header = { 0.08, 0.20, 0.26, 1.00 },
+        title = { 0.00, 0.88, 1.00, 1.00 },
+        text = { 1.00, 1.00, 1.00, 1.00 },
+        muted = { 0.50, 0.74, 0.80, 1.00 },
+        season = { 1.00, 0.86, 0.00, 1.00 },
+        fontKey = "frizqt",
     },
 }
+
+local THEME_COLOR_KEYS = { "section", "row", "rowAlt", "border", "header", "title", "text", "muted", "season" }
+local FONT_PATHS = {
+    frizqt = "Fonts\\FRIZQT__.TTF",
+    arialn = "Fonts\\ARIALN.TTF",
+    skurri = "Fonts\\skurri.ttf",
+    morpheus = "Fonts\\MORPHEUS.TTF",
+}
+
+local function CopyThemeColors(source, fallback)
+    local out = {}
+    for _, key in ipairs(THEME_COLOR_KEYS) do
+        local color = source and source[key]
+        if type(color) ~= "table" then
+            color = fallback and fallback[key]
+        end
+        if type(color) == "table" then
+            out[key] = {
+                tonumber(color[1]) or 1,
+                tonumber(color[2]) or 1,
+                tonumber(color[3]) or 1,
+                tonumber(color[4]) or 1,
+            }
+        else
+            out[key] = { 1, 1, 1, 1 }
+        end
+    end
+    out.fontKey = type(source and source.fontKey) == "string" and source.fontKey
+        or type(fallback and fallback.fontKey) == "string" and fallback.fontKey
+        or "frizqt"
+    return out
+end
+
+local function ResolveThemeValue(key, settings)
+    local preset = THEME_PRESETS[key]
+    if preset then
+        return CopyThemeColors(preset, THEME_PRESETS.brown)
+    end
+
+    local custom = settings and settings.customThemes and settings.customThemes[key]
+    if type(custom) == "table" then
+        return CopyThemeColors(custom, THEME_PRESETS.brown)
+    end
+
+    return CopyThemeColors(THEME_PRESETS.brown, THEME_PRESETS.brown)
+end
+
+local function GetThemeFontPath(theme)
+    local fontKey = theme and theme.fontKey
+    return FONT_PATHS[fontKey] or FONT_PATHS.frizqt
+end
 
 GetSettings = function()
     local api = Preydator and Preydator.API
@@ -242,6 +386,14 @@ local function EnsureSettings()
 
     if settings.huntScannerPreviewInOptions == nil then
         settings.huntScannerPreviewInOptions = false
+    end
+
+    if settings.huntScannerShowRewardIcons == nil then
+        settings.huntScannerShowRewardIcons = true
+    end
+
+    if settings.themeEditorPreviewInOptions == nil then
+        settings.themeEditorPreviewInOptions = false
     end
 
     if settings.huntScannerGroupBy ~= "none" and settings.huntScannerGroupBy ~= "difficulty" and settings.huntScannerGroupBy ~= "zone" then
@@ -284,9 +436,18 @@ end
 
 local function GetTheme()
     local settings = GetSettings()
+
+    if settings and settings.themeEditorPreviewInOptions == true and type(settings.themeEditorColors) == "table" then
+        local baseKey = settings.themeEditorLoadKey or "brown"
+        local baseTheme = ResolveThemeValue(baseKey, settings)
+        local previewTheme = CopyThemeColors(settings.themeEditorColors, baseTheme)
+        previewTheme.fontKey = settings.themeEditorFontKey or baseTheme.fontKey or "frizqt"
+        return previewTheme
+    end
+
     local useCurrencyTheme = not settings or settings.huntScannerUseCurrencyTheme ~= false
     local key = useCurrencyTheme and (settings and settings.currencyTheme or "brown") or (settings and settings.huntScannerTheme or "brown")
-    return THEME_PRESETS[key] or THEME_PRESETS.brown
+    return ResolveThemeValue(key, settings)
 end
 
 local function GetCoreState()
@@ -579,7 +740,7 @@ local function GetActivePreyStage()
     return nil
 end
 
-local function HasActivePreyQuest()
+HasActivePreyQuest = function()
     return GetActivePreyQuestID() ~= nil
 end
 
@@ -715,6 +876,77 @@ local function BuildRewardSummary(questID)
         return score
     end
 
+    local function StripIconTags(text)
+        if type(text) ~= "string" then
+            return ""
+        end
+
+        return (text:gsub("|T[^|]+|t%s*", ""))
+    end
+
+    local function ListHasRewardIcons(list)
+        if type(list) ~= "table" then
+            return false
+        end
+
+        for _, entry in ipairs(list) do
+            local text = tostring(entry or "")
+            if text:find("|T", 1, true) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function FormatRewardList(list, showIcons)
+        if type(list) ~= "table" then
+            return ""
+        end
+
+        local entries = {}
+        for _, entry in ipairs(list) do
+            local text = tostring(entry or "")
+            if text ~= "" then
+                if not showIcons then
+                    text = StripIconTags(text)
+                end
+                entries[#entries + 1] = text
+            end
+        end
+
+        return table.concat(entries, ", ")
+    end
+
+    local function BuildQuestCurrencyRewardList(id)
+        local rewards = {}
+
+        if C_QuestLog and type(C_QuestLog.GetQuestRewardCurrencies) == "function" then
+            local rewardCurrencies = C_QuestLog.GetQuestRewardCurrencies(id)
+            if type(rewardCurrencies) == "table" and #rewardCurrencies > 0 and type(C_QuestLog.GetQuestRewardCurrencyInfo) == "function" then
+                for index = 1, #rewardCurrencies do
+                    local info = C_QuestLog.GetQuestRewardCurrencyInfo(id, index, false)
+                    if type(info) == "table" then
+                        local amount = tonumber(info.quantity or info.totalRewardAmount or info.numCurrency or 0) or 0
+                        local name = info.name or info.currencyName or (info.currencyID and ("Currency " .. tostring(info.currencyID))) or nil
+                        local icon = info.iconFileID or info.icon or info.textureFileID or info.iconTexture or info.texture
+                        local iconTag = BuildIconTag(icon)
+                        if name and amount > 0 then
+                            rewards[#rewards + 1] = iconTag .. tostring(amount) .. " " .. tostring(name)
+                        elseif name then
+                            rewards[#rewards + 1] = iconTag .. tostring(name)
+                        end
+                    end
+                end
+            end
+        end
+
+        return rewards
+    end
+
+    local settings = GetSettings() or {}
+    local showRewardIcons = settings.huntScannerShowRewardIcons ~= false
+
     if type(questID) ~= "number" or questID < 1 then
         return L["Rewards unknown"]
     end
@@ -729,8 +961,20 @@ local function BuildRewardSummary(questID)
             SaveRewardCaches()
         end
 
+        if showRewardIcons and not ListHasRewardIcons(cached) then
+            local upgraded = BuildQuestCurrencyRewardList(questID)
+            if #upgraded > 0 then
+                cached = upgraded
+                rewardCache[questID] = CopyStringList(upgraded)
+                SaveRewardCaches()
+            else
+                rewardCache[questID] = nil
+                SaveRewardCaches()
+            end
+        end
+
         if #cached > 0 then
-            return table.concat(cached, ", ")
+            return FormatRewardList(cached, showRewardIcons)
         end
         return L["No tracked rewards"]
     end
@@ -738,44 +982,36 @@ local function BuildRewardSummary(questID)
     local difficulty = GetRememberedQuestDifficulty(questID)
     local sharedRewards = difficulty and difficultyRewardCache[difficulty] or nil
     if type(sharedRewards) == "table" then
-        rewardCache[questID] = CopyStringList(sharedRewards)
+        local effectiveRewards = sharedRewards
+        if showRewardIcons and not ListHasRewardIcons(sharedRewards) then
+            local upgraded = BuildQuestCurrencyRewardList(questID)
+            if #upgraded > 0 then
+                effectiveRewards = upgraded
+            else
+                rewardCache[questID] = nil
+            end
+        end
+
+        rewardCache[questID] = CopyStringList(effectiveRewards)
         SaveRewardCaches()
-        if #sharedRewards > 0 then
-            return table.concat(sharedRewards, ", ")
+        if #effectiveRewards > 0 then
+            return FormatRewardList(effectiveRewards, showRewardIcons)
         end
         return L["No tracked rewards"]
     end
 
-    local rewards = {}
-
-    if C_QuestLog and type(C_QuestLog.GetQuestRewardCurrencies) == "function" then
-        local rewardCurrencies = C_QuestLog.GetQuestRewardCurrencies(questID)
-        if type(rewardCurrencies) == "table" and #rewardCurrencies > 0 and type(C_QuestLog.GetQuestRewardCurrencyInfo) == "function" then
-            for index = 1, #rewardCurrencies do
-                local info = C_QuestLog.GetQuestRewardCurrencyInfo(questID, index, false)
-                if type(info) == "table" then
-                    local amount = tonumber(info.quantity or info.totalRewardAmount or info.numCurrency or 0) or 0
-                    local name = info.name or info.currencyName or (info.currencyID and ("Currency " .. tostring(info.currencyID))) or nil
-                    local icon = info.iconFileID or info.icon or info.textureFileID or info.iconTexture or info.texture
-                    local iconTag = BuildIconTag(icon)
-                    if name and amount > 0 then
-                        rewards[#rewards + 1] = iconTag .. tostring(amount) .. " " .. tostring(name)
-                    elseif name then
-                        rewards[#rewards + 1] = iconTag .. tostring(name)
-                    end
-                end
-            end
-        end
-    end
+    local rewards = BuildQuestCurrencyRewardList(questID)
 
     if #rewards == 0 then
         return L["Reward data pending"]
     end
 
-    return table.concat(rewards, ", ")
+    rewardCache[questID] = CopyStringList(rewards)
+    SaveRewardCaches()
+    return FormatRewardList(rewards, showRewardIcons)
 end
 
-local function IsMissionFrameVisible()
+IsMissionFrameVisible = function()
     local frame = _G.CovenantMissionFrame
     return frame and frame:IsShown() == true
 end
@@ -830,6 +1066,23 @@ local function InferZoneFromCoords(x, y)
     end
 
     return "Eversong Woods"
+end
+
+local function GetAdventureMapID()
+    local mission = _G.CovenantMissionFrame
+    local mapTab = mission and mission.MapTab
+    if not mapTab then
+        return nil
+    end
+    local sc = mapTab.ScrollContainer
+    if sc and type(sc.GetMapID) == "function" then
+        return sc:GetMapID()
+    end
+    local mc = mapTab.MapCanvas
+    if mc and type(mc.GetMapID) == "function" then
+        return mc:GetMapID()
+    end
+    return nil
 end
 
 local function GetAdventurePinPool()
@@ -990,20 +1243,47 @@ local function RefreshHuntsFromPins()
 
     local nextHunts = {}
     local seenQuestIDs = {}
+    local previousCount = #liveHunts
+    local adventureMapID = GetAdventureMapID()
+    if adventureMapID then
+        cachedAdventureMapID = adventureMapID
+    end
 
     for pin in pool:EnumerateActive() do
         local questID = tonumber(pin and pin.questID)
         local title = pin and pin.title
         if questID and questID > 0 and type(title) == "string" and title ~= "" then
             seenQuestIDs[questID] = true
+            local nx, ny = pin.normalizedX, pin.normalizedY
+            -- Cache raw coords so zone can be resolved later even when map is closed.
+            if type(nx) == "number" and type(ny) == "number" then
+                questCoords[questID] = { nx = nx, ny = ny }
+            end
+            local zoneMapID = nil
+            if (adventureMapID or cachedAdventureMapID) and C_Map and C_Map.GetMapInfoAtPosition then
+                local mapForLookup = adventureMapID or cachedAdventureMapID
+                local zoneInfo = C_Map.GetMapInfoAtPosition(mapForLookup, nx or 0, ny or 0)
+                zoneMapID = zoneInfo and zoneInfo.mapID
+            end
+            if zoneMapID then
+                questZoneCache[questID] = zoneMapID
+            end
             nextHunts[#nextHunts + 1] = {
                 questID = questID,
                 title = title,
                 difficulty = ParseDifficulty(pin.description),
-                zone = InferZoneFromCoords(pin.normalizedX, pin.normalizedY),
+                zone = InferZoneFromCoords(nx, ny),
+                zoneMapID = zoneMapID,
             }
             RememberQuestDifficulty(questID, nextHunts[#nextHunts].difficulty)
         end
+    end
+
+    -- The mission frame pin pool can be available before pins hydrate.
+    -- Keep the previous snapshot in this transient state so availability
+    -- counts do not flash to zero and then rebound a few seconds later.
+    if #nextHunts == 0 and previousCount > 0 and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible()) then
+        return liveHunts
     end
 
     for questID in pairs(rewardCache) do
@@ -1720,10 +2000,53 @@ local function EnsurePanel()
     end)
 
     local startY = -54
+
+    -- ScrollFrame clips row content within the panel boundary
+    local scrollViewport = CreateFrame("ScrollFrame", nil, frame)
+    scrollViewport:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, startY)
+    scrollViewport:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 4)
+    scrollViewport:EnableMouseWheel(true)
+
+    local scrollContent = CreateFrame("Frame", nil, scrollViewport)
+    scrollContent:SetSize(panelWidth - 30, 12 * panelRowHeight)
+    scrollViewport:SetScrollChild(scrollContent)
+
+    local scrollBar = CreateFrame("Slider", nil, frame, "OptionsSliderTemplate")
+    scrollBar:SetOrientation("VERTICAL")
+    scrollBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, startY - 2)
+    scrollBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 6)
+    scrollBar:SetWidth(14)
+    scrollBar:SetMinMaxValues(0, 0)
+    scrollBar:SetValue(0)
+    scrollBar:SetValueStep(1)
+    scrollBar:SetObeyStepOnDrag(true)
+    if scrollBar.Low then scrollBar.Low:Hide() end
+    if scrollBar.High then scrollBar.High:Hide() end
+    if scrollBar.Text then scrollBar.Text:Hide() end
+    scrollBar:SetEnabled(false)
+    scrollBar:SetAlpha(0.3)
+    scrollBar:SetScript("OnValueChanged", function(self, value)
+        local _, maxVal = self:GetMinMaxValues()
+        local clamped = math.max(0, math.min(value or 0, maxVal or 0))
+        scrollViewport:SetVerticalScroll(clamped)
+    end)
+    scrollViewport:SetScript("OnMouseWheel", function(_, delta)
+        local _, maxVal = scrollBar:GetMinMaxValues()
+        local cur = scrollBar:GetValue() or 0
+        scrollBar:SetValue(math.max(0, math.min(cur - (delta * 20), maxVal or 0)))
+    end)
+
+    panelScrollViewport = scrollViewport
+    panelScrollContent = scrollContent
+    panelScrollBar = scrollBar
+    frame.PreydatorScrollViewport = scrollViewport
+    frame.PreydatorScrollContent = scrollContent
+    frame.PreydatorScrollBar = scrollBar
+
     for index = 1, 12 do
-        local row = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-        row:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, startY - ((index - 1) * panelRowHeight))
-        row:SetSize(panelWidth - 20, panelRowHeight - 4)
+        local row = CreateFrame("Frame", nil, scrollContent, "BackdropTemplate")
+        row:SetPoint("TOPLEFT", scrollContent, "TOPLEFT", 0, -((index - 1) * panelRowHeight))
+        row:SetSize(panelWidth - 30, panelRowHeight - 4)
         row:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8x8",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1737,9 +2060,15 @@ local function EnsurePanel()
         name:SetJustifyH("LEFT")
         name:SetText("-")
 
+        local zone = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        zone:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
+        zone:SetPoint("TOPRIGHT", row, "TOPRIGHT", -74, 0)
+        zone:SetJustifyH("LEFT")
+        zone:SetText("")
+
         local reward = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        reward:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -3)
-        reward:SetPoint("TOPRIGHT", row, "TOPRIGHT", -74, -3)
+        reward:SetPoint("TOPLEFT", zone, "BOTTOMLEFT", 0, -2)
+        reward:SetPoint("TOPRIGHT", row, "TOPRIGHT", -74, 0)
         reward:SetJustifyH("LEFT")
         reward:SetWordWrap(true)
         reward:SetText("-")
@@ -1760,6 +2089,7 @@ local function EnsurePanel()
         end)
 
         row.PreydatorName = name
+        row.PreydatorZone = zone
         row.PreydatorReward = reward
         row.PreydatorAccept = acceptButton
         row.PreydatorQuestID = nil
@@ -1784,6 +2114,7 @@ end
 local function UpdatePanelTheme(frame)
     local theme = GetTheme()
     local _, _, fontSize = GetPanelConfig()
+    local fontPath = GetThemeFontPath(theme)
 
     frame:SetBackdropColor(theme.section[1], theme.section[2], theme.section[3], theme.section[4])
     frame:SetBackdropBorderColor(theme.border[1], theme.border[2], theme.border[3], theme.border[4])
@@ -1795,10 +2126,10 @@ local function UpdatePanelTheme(frame)
     SetTextColor(frame.PreydatorTitle, theme.title)
     SetTextColor(frame.PreydatorSubtitle, theme.muted)
     if frame.PreydatorTitle and frame.PreydatorTitle.SetFont then
-        frame.PreydatorTitle:SetFont("Fonts\\FRIZQT__.TTF", math.max(11, fontSize), "")
+        frame.PreydatorTitle:SetFont(fontPath, math.max(11, fontSize), "")
     end
     if frame.PreydatorSubtitle and frame.PreydatorSubtitle.SetFont then
-        frame.PreydatorSubtitle:SetFont("Fonts\\FRIZQT__.TTF", math.max(10, fontSize - 1), "")
+        frame.PreydatorSubtitle:SetFont(fontPath, math.max(10, fontSize - 1), "")
     end
 
     for index, row in ipairs(panelRows) do
@@ -1806,12 +2137,18 @@ local function UpdatePanelTheme(frame)
         row:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
         row:SetBackdropBorderColor(theme.border[1], theme.border[2], theme.border[3], 0.65)
         SetTextColor(row.PreydatorName, theme.title)
+        if row.PreydatorZone then
+            SetTextColor(row.PreydatorZone, theme.muted)
+        end
         SetTextColor(row.PreydatorReward, theme.text)
         if row.PreydatorName and row.PreydatorName.SetFont then
-            row.PreydatorName:SetFont("Fonts\\FRIZQT__.TTF", math.max(10, fontSize), "")
+            row.PreydatorName:SetFont(fontPath, math.max(10, fontSize), "")
+        end
+        if row.PreydatorZone and row.PreydatorZone.SetFont then
+            row.PreydatorZone:SetFont(fontPath, math.max(9, fontSize - 1), "")
         end
         if row.PreydatorReward and row.PreydatorReward.SetFont then
-            row.PreydatorReward:SetFont("Fonts\\FRIZQT__.TTF", math.max(9, fontSize - 1), "")
+            row.PreydatorReward:SetFont(fontPath, math.max(9, fontSize - 1), "")
         end
 
         if row.PreydatorAccept and row.PreydatorAccept.SetNormalFontObject then
@@ -1985,6 +2322,84 @@ local function BuildQuestRows(mapHunts)
     return rows
 end
 
+local function ReflowHuntRows()
+    if not panelScrollViewport or not panelScrollContent or not panelScrollBar or not panelFrame then
+        return
+    end
+
+    local rowWidth = panelScrollContent:GetWidth()
+    if rowWidth < 10 then
+        return
+    end
+
+    local yOffset = 0
+    local gap = 4
+    local nameLineH = 16
+    local rewardLineH = 13
+    local rowPadTop = 7
+    local rowPadBottom = 6
+
+    for index = 1, 12 do
+        local row = panelRows[index]
+        if not row then
+            break
+        end
+        if row:IsShown() then
+            local rewardH = (row.PreydatorReward and row.PreydatorReward:GetStringHeight()) or rewardLineH
+            local zoneH = 0
+            if row.PreydatorZone then
+                local zt = row.PreydatorZone:GetText()
+                if zt and zt ~= "" then
+                    zoneH = math.ceil(row.PreydatorZone:GetStringHeight() or 13) + 2
+                end
+            end
+            local rowH = math.max(panelRowHeight - 4, rowPadTop + nameLineH + zoneH + 3 + math.ceil(rewardH) + rowPadBottom)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", panelScrollContent, "TOPLEFT", 0, -yOffset)
+            row:SetSize(rowWidth, rowH)
+            yOffset = yOffset + rowH + gap
+        end
+    end
+
+    panelScrollContent:SetHeight(math.max(1, yOffset))
+    panelScrollViewport:UpdateScrollChildRect()
+
+    local scrollRange = panelScrollViewport:GetVerticalScrollRange() or 0
+    scrollRange = math.max(0, scrollRange)
+    if scrollRange > 0 then
+        panelScrollBar:SetMinMaxValues(0, scrollRange)
+        local cur = math.min(panelScrollBar:GetValue() or 0, scrollRange)
+        panelScrollBar:SetValue(cur)
+        panelScrollBar:SetEnabled(true)
+        panelScrollBar:SetAlpha(1)
+    else
+        panelScrollBar:SetMinMaxValues(0, 0)
+        panelScrollBar:SetValue(0)
+        panelScrollBar:SetEnabled(false)
+        panelScrollBar:SetAlpha(0.3)
+    end
+end
+
+local reflowScheduled = false
+
+local function QueueReflowRows()
+    if reflowScheduled then
+        return
+    end
+    reflowScheduled = true
+
+    if C_Timer then
+        C_Timer.After(0, function()
+            reflowScheduled = false
+            ReflowHuntRows()
+        end)
+        return
+    end
+
+    reflowScheduled = false
+    ReflowHuntRows()
+end
+
 local function RenderPanel(questRows)
     if not IsOptionsPreviewVisible() and not HasVisibleHuntAnchor() then
         HidePanel()
@@ -1995,6 +2410,9 @@ local function RenderPanel(questRows)
     local panelWidth, panelHeight, _, panelScale = GetPanelConfig()
     frame:SetSize(panelWidth, panelHeight)
     frame:SetScale(panelScale)
+    if panelScrollContent then
+        panelScrollContent:SetWidth(panelWidth - 30)
+    end
     UpdatePanelTheme(frame)
     ApplyPanelAnchor(frame)
 
@@ -2016,14 +2434,14 @@ local function RenderPanel(questRows)
 
     for index, row in ipairs(panelRows) do
         local data = questRows[index]
-        local rowY = -54 - ((index - 1) * panelRowHeight)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, rowY)
-        row:SetSize(panelWidth - 20, panelRowHeight - 4)
         if data then
             row:Show()
             row.PreydatorQuestID = tonumber(data.questID)
             row.PreydatorName:SetText(data.title or "-")
+            if row.PreydatorZone then
+                local showZone = not data.groupKey and data.zone and data.zone ~= "" and data.zone ~= L["Unknown"]
+                row.PreydatorZone:SetText(showZone and data.zone or "")
+            end
             row.PreydatorReward:SetText(data.reward or "")
             if row.PreydatorAccept then
                 if data.canAccept and row.PreydatorQuestID then
@@ -2064,22 +2482,31 @@ local function RenderPanel(questRows)
                 row.PreydatorAccept:Hide()
                 row.PreydatorAccept:Disable()
             end
+            row:ClearAllPoints()
             row:SetScript("OnMouseUp", nil)
             row:Hide()
         end
     end
 
     frame:Show()
+    QueueReflowRows()
 end
 
 HidePanel = function()
     if panelFrame then
         panelFrame:Hide()
     end
+    if panelScrollBar then
+        panelScrollBar:SetValue(0)
+    end
+    if panelScrollViewport then
+        panelScrollViewport:SetVerticalScroll(0)
+    end
     huntInteractionActive = false
     snapshotSequence = snapshotSequence + 1
     lastOpenQuestID = nil
     lastOpenAt = 0
+    SyncNoisyEventSubscriptions()
 end
 
 HandleInteractionSnapshot = function()
@@ -2113,6 +2540,7 @@ HandleInteractionSnapshot = function()
             isHuntContext = true
         end
         huntInteractionActive = isHuntContext == true
+        SyncNoisyEventSubscriptions()
         if isHuntContext then
             MarkAvailabilityTouched()
         end
@@ -2235,6 +2663,30 @@ function HuntScannerModule:HandleOptionsPanelVisibility(isVisible)
         return
     end
 
+    local settings = GetSettings()
+    if settings then
+        settings.themeEditorPreviewInOptions = false
+    end
+
+    if not HasVisibleHuntAnchor() then
+        HidePanel()
+        return
+    end
+
+    self:RefreshNow()
+end
+
+function HuntScannerModule:SetThemePreviewEnabled(enabled)
+    local settings = GetSettings()
+    if settings then
+        settings.themeEditorPreviewInOptions = enabled == true
+    end
+
+    if IsOptionsPreviewVisible() then
+        RenderPanel(BuildPreviewRows())
+        return
+    end
+
     if not HasVisibleHuntAnchor() then
         HidePanel()
         return
@@ -2303,7 +2755,7 @@ function HuntScannerModule:OnSlashCommand(text, rest)
     return false
 end
 
-QueueInteractionSnapshotPasses = function()
+QueueInteractionSnapshotPasses = function(force)
     if IsInRestrictedInstance() then
         HidePanel()
         return
@@ -2314,13 +2766,20 @@ QueueInteractionSnapshotPasses = function()
         return
     end
 
-    if not IsOptionsPreviewVisible() and not IsMissionFrameVisible() and not huntInteractionActive then
+    if not force and not IsOptionsPreviewVisible() and not IsMissionFrameVisible() and not huntInteractionActive then
         local options = GetGossipOptionsSafe()
         local isHuntContext = IsHuntTableContext(options)
         if not isHuntContext then
             return
         end
     end
+
+    local now = GetTime and (tonumber(GetTime()) or 0) or 0
+    if not force and now < queueDebounceUntil then
+        HandleInteractionSnapshot()
+        return
+    end
+    queueDebounceUntil = now + SNAPSHOT_QUEUE_DEBOUNCE_SECONDS
 
     snapshotSequence = snapshotSequence + 1
     local token = snapshotSequence
@@ -2331,7 +2790,9 @@ QueueInteractionSnapshotPasses = function()
         return
     end
 
-    for _, delay in ipairs({ 0.00, 0.05, 0.20, 0.50, 1.00 }) do
+    -- Delays extend to 10s so pins that load slowly (server lag) are still caught.
+    -- The snapshotSequence token cancels stale passes when the user leaves.
+    for _, delay in ipairs({ 0.05, 0.20, 0.50, 1.00, 2.00, 4.00, 7.00, 10.00 }) do
         C_Timer.After(delay, function()
             if token ~= snapshotSequence then
                 return
@@ -2437,14 +2898,65 @@ function HuntScannerModule:GetAvailabilityCounts()
     }
 end
 
+function HuntScannerModule:GetQuestZoneMapID(questID)
+    local id = tonumber(questID)
+    if not id then
+        return nil
+    end
+    local fromCache = questZoneCache[id]
+    if type(fromCache) == "number" then
+        return fromCache
+    end
+    local hunt = huntByQuestID[id]
+    if hunt and type(hunt.zoneMapID) == "number" then
+        return hunt.zoneMapID
+    end
+    -- If we have cached pin coordinates and a parent map ID, resolve zone on demand.
+    local coords = questCoords[id]
+    local parentMapID = cachedAdventureMapID
+    if coords and parentMapID and C_Map and C_Map.GetMapInfoAtPosition then
+        local zoneInfo = C_Map.GetMapInfoAtPosition(parentMapID, coords.nx, coords.ny)
+        local zoneMapID = zoneInfo and zoneInfo.mapID
+        if zoneMapID then
+            questZoneCache[id] = zoneMapID
+            return zoneMapID
+        end
+    end
+    return nil
+end
+
+function HuntScannerModule:GetQuestMetadata(questID)
+    local id = tonumber(questID)
+    if not id then
+        return nil
+    end
+
+    local hunt = huntByQuestID[id]
+    local zoneMapID = self:GetQuestZoneMapID(id)
+    local zoneName = hunt and hunt.zone or nil
+    local difficulty = hunt and hunt.difficulty or GetRememberedQuestDifficulty(id)
+    local title = hunt and hunt.title or nil
+    local sourceType = hunt and "weekly" or "random"
+
+    return {
+        questID = id,
+        title = title,
+        difficulty = difficulty,
+        zoneName = zoneName,
+        zoneMapID = zoneMapID,
+        sourceType = sourceType,
+    }
+end
+
 function HuntScannerModule:OnAddonLoaded()
     EnsureSettings()
     LoadRewardCaches()
     ProcessRewardCacheLifecycle()
     ApplyMissionHooks()
+    SyncNoisyEventSubscriptions()
 end
 
-local huntEventFrame = CreateFrame("Frame")
+huntEventFrame = CreateFrame("Frame")
 huntEventFrame:RegisterEvent("PLAYER_LOGIN")
 huntEventFrame:RegisterEvent("GOSSIP_SHOW")
 huntEventFrame:RegisterEvent("GOSSIP_CLOSED")
@@ -2455,26 +2967,36 @@ huntEventFrame:RegisterEvent("QUEST_DETAIL")
 huntEventFrame:RegisterEvent("QUEST_PROGRESS")
 huntEventFrame:RegisterEvent("QUEST_COMPLETE")
 huntEventFrame:RegisterEvent("QUEST_FINISHED")
-huntEventFrame:RegisterEvent("QUEST_LOG_UPDATE")
-huntEventFrame:RegisterEvent("UPDATE_UI_WIDGET")
-huntEventFrame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
 
 huntEventFrame:SetScript("OnEvent", function(_, event, ...)
-    RecordEvent(event, ...)
+    local noisyEvent = (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS")
+    local hasActiveQuest = HasActivePreyQuest()
+    local hasHuntContext = IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or hasActiveQuest
+
+    if (not noisyEvent) or hasHuntContext then
+        RecordEvent(event, ...)
+    end
 
     if event == "PLAYER_LOGIN" then
         EnsureSettings()
         LoadRewardCaches()
         ProcessRewardCacheLifecycle()
         ApplyMissionHooks()
+        SyncNoisyEventSubscriptions()
         return
     end
 
-    if event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS" then
+    if (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS") and hasHuntContext then
         ProcessRewardCacheLifecycle()
     end
 
     if event == "GOSSIP_SHOW" then
+        -- Pre-flag hunt context eagerly so UPDATE_UI_WIDGET events refire while pins load.
+        local gossipOptions = GetGossipOptionsSafe()
+        if IsHuntTableContext(gossipOptions) then
+            huntInteractionActive = true
+            SyncNoisyEventSubscriptions()
+        end
         QueueInteractionSnapshotPasses()
         return
     end
@@ -2484,8 +3006,15 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
-    if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW"
-        or event == "QUEST_DETAIL"
+    if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
+        -- Pre-flag so widget update events keep refiring while mission frame pins load.
+        huntInteractionActive = true
+        SyncNoisyEventSubscriptions()
+        QueueInteractionSnapshotPasses(true)
+        return
+    end
+
+    if event == "QUEST_DETAIL"
         or event == "QUEST_PROGRESS"
         or event == "QUEST_COMPLETE"
     then
@@ -2506,7 +3035,7 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         or event == "UPDATE_ALL_UI_WIDGETS"
         or event == "QUEST_LOG_UPDATE"
     then
-        if IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() then
+        if hasHuntContext then
             QueueInteractionSnapshotPasses()
         end
         return
