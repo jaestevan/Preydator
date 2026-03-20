@@ -924,62 +924,6 @@ local function ColorsClose(left, right)
     return true
 end
 
-local function OpenColorPicker(initialColor, callback)
-    local picker = _G.ColorPickerFrame
-    if not picker then
-        return
-    end
-
-    local start = {
-        (initialColor and initialColor[1]) or 1,
-        (initialColor and initialColor[2]) or 1,
-        (initialColor and initialColor[3]) or 1,
-        (initialColor and initialColor[4]) or 1,
-    }
-
-    local function apply()
-        local r, g, b
-        if picker.GetColorRGB then
-            r, g, b = picker:GetColorRGB()
-        elseif picker.Content and picker.Content.ColorPicker and picker.Content.ColorPicker.GetColorRGB then
-            r, g, b = picker.Content.ColorPicker:GetColorRGB()
-        else
-            r, g, b = start[1], start[2], start[3]
-        end
-        callback({ r, g, b, start[4] })
-    end
-
-    local function cancel(previousValues)
-        if type(previousValues) == "table" then
-            callback({ previousValues.r or start[1], previousValues.g or start[2], previousValues.b or start[3], previousValues.a or start[4] })
-            return
-        end
-        callback(start)
-    end
-
-    if picker.SetupColorPickerAndShow then
-        picker:SetupColorPickerAndShow({
-            r = start[1],
-            g = start[2],
-            b = start[3],
-            hasOpacity = false,
-            swatchFunc = apply,
-            func = apply,
-            cancelFunc = cancel,
-        })
-        return
-    end
-
-    picker.hasOpacity = false
-    picker.previousValues = { start[1], start[2], start[3], start[4] }
-    picker.func = apply
-    picker.swatchFunc = apply
-    picker.cancelFunc = cancel
-    picker:SetColorRGB(start[1], start[2], start[3])
-    picker:Hide()
-    picker:Show()
-end
-
 local function GetSettings()
     local api = Preydator and Preydator.API
     if not api or type(api.GetSettings) ~= "function" then

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.0.2 - 2026-03-20
+
+### Changed
+- Ambush sound alerts now use a 45-second cooldown between plays to prevent rapid repeat firing from clustered ambush chat events.
+
+## 2.0.1 - 2026-03-20
+
+### Changed
+- Module inspect output now includes instance/map diagnostics (`inInstance`, `instanceType`, `playerMapType`) and prey-zone cache diagnostics (`preyZoneMapID`, `preyZoneName`, `zoneCacheDirty`) for easier screenshot-based troubleshooting.
+- Module inspect output removed the center-dot diagnostic row to keep reports focused on live visibility/state issues.
+- Shared slider helpers were centralized in `Preydator.API` (`Clamp`, `RoundToStep`, `NormalizeSliderValue`) and consumed by `Settings` and `EditMode` to reduce helper drift.
+
+### Fixed
+- `Only show in prey zone` visibility now correctly hides the bar whenever `inPreyZone == false`, including fallback paths where a prey zone map ID is unavailable.
+- Delve/instance bar gating was hardened with a restricted-instance check plus dungeon map-type fallback, preventing bar visibility in restricted instance content while preserving Edit Mode preview.
+- Zone transition recovery was improved to prevent stale out-of-zone state after Delve exit:
+  - registered `PLAYER_ENTERING_WORLD` for zone cache invalidation,
+  - added periodic retry refresh while `inPreyZone == false`,
+  - forced hierarchy rebuild on stale retry checks.
+- HuntScanner snapshot/caching paths were hardened against protected Blizzard values by switching quest-ID numeric coercion to safe conversion helpers.
+
+### Cleanup
+- Removed unused `CurrencyTracker` local `OpenColorPicker` helper.
+- Removed stale `HuntScanner` compatibility branch referencing `ZoneGateV2` (non-present module path in this repo).
+
 ## 2.0.0 - 2026-03-19
 
 ### Added

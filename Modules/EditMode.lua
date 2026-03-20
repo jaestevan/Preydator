@@ -16,25 +16,26 @@ local function IsFrameMouseOver(frame)
 end
 
 local function Clamp(value, minValue, maxValue)
+    if api and type(api.Clamp) == "function" then
+        return api.Clamp(value, minValue, maxValue)
+    end
     return math.max(minValue, math.min(maxValue, value))
 end
 
-local function RoundToStep(value, step)
-    if not step or step <= 0 then
-        return value
+local function NormalizeSliderValue(value, minValue, maxValue, step)
+    if api and type(api.NormalizeSliderValue) == "function" then
+        return api.NormalizeSliderValue(value, minValue, maxValue, step)
     end
 
-    return math.floor((value / step) + 0.5) * step
-end
-
-local function NormalizeSliderValue(value, minValue, maxValue, step)
     local numeric = tonumber(value)
     if not numeric then
         return nil
     end
 
     numeric = Clamp(numeric, minValue, maxValue)
-    numeric = RoundToStep(numeric, step)
+    if step and step > 0 then
+        numeric = math.floor((numeric / step) + 0.5) * step
+    end
     return Clamp(numeric, minValue, maxValue)
 end
 

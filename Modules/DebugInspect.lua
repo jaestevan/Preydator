@@ -8,6 +8,7 @@ end
 local C_QuestLog = _G.C_QuestLog
 local C_Map = _G.C_Map
 local C_TaskQuest = _G.C_TaskQuest
+local IsInInstance = _G.IsInInstance
 local geterrorhandler = _G.geterrorhandler
 local GetTime = _G.GetTime
 local GetZoneText = _G.GetZoneText
@@ -78,9 +79,21 @@ local function BuildQuestInspectReport(requestedQuestID)
     local now = GetTime and GetTime() or 0
     local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
     local playerMapName = nil
+    local playerMapType = nil
     if playerMapID and C_Map and C_Map.GetMapInfo then
         local mapInfo = C_Map.GetMapInfo(playerMapID)
         playerMapName = mapInfo and mapInfo.name or nil
+        playerMapType = mapInfo and mapInfo.mapType or nil
+    end
+
+    local inInstance = nil
+    local instanceType = nil
+    if IsInInstance then
+        local okInstance, rawInInstance, rawInstanceType = pcall(IsInInstance)
+        if okInstance then
+            inInstance = rawInInstance == true
+            instanceType = rawInstanceType
+        end
     end
 
     add("Preydator Quest Inspect (module)")
@@ -208,9 +221,13 @@ local function BuildInspectReport()
 
     add("Preydator Inspect (module)")
     add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. tostring(playerMapID) .. " | playerMap=" .. tostring(playerMapName))
+    add("- instance inInstance=" .. tostring(inInstance) .. " | instanceType=" .. tostring(instanceType) .. " | playerMapType=" .. tostring(playerMapType))
     add("- quest live=" .. tostring(liveQuestID) .. " | hasActive=" .. tostring(hasActiveQuest) .. " | tracked=" .. tostring(state.activeQuestID))
     add("- state stage=" .. tostring(state.stage) .. " | progressState=" .. tostring(state.progressState) .. " | progressPercent=" .. tostring(state.progressPercent))
-    add("- inPreyZone=" .. tostring(state.inPreyZone) .. " | disableDefaultPreyIcon=" .. tostring(settings and settings.disableDefaultPreyIcon == true))
+    add("- preyZone mapID=" .. tostring(state.preyZoneMapID) .. " | preyZoneName=" .. tostring(state.preyZoneName) .. " | zoneCacheDirty=" .. tostring(state.zoneCacheDirty))
+    add("- inPreyZone=" .. tostring(state.inPreyZone)
+        .. " | onlyShowInPreyZone=" .. tostring(settings and settings.onlyShowInPreyZone == true)
+        .. " | disableDefaultPreyIcon=" .. tostring(settings and settings.disableDefaultPreyIcon == true))
     add("- settings size width=" .. tostring(settings and settings.width)
         .. " | height=" .. tostring(settings and settings.height)
         .. " | scale=" .. tostring(settings and settings.scale))
@@ -245,7 +262,6 @@ local function BuildInspectReport()
         local prefix = labelFrames.prefix
         local suffix = labelFrames.suffix
         local percent = labelFrames.percent
-        local centerDot = labelFrames.centerDot
 
         add("- prefix"
             .. " | shown=" .. tostring(prefix and prefix.IsShown and prefix:IsShown() or false)
@@ -259,10 +275,6 @@ local function BuildInspectReport()
             .. " | shown=" .. tostring(percent and percent.IsShown and percent:IsShown() or false)
             .. " | text='" .. tostring(percent and percent.GetText and percent:GetText() or "") .. "'"
             .. " | point=" .. FormatPoint(percent))
-        add("- centerDot"
-            .. " | enabledSetting=" .. tostring(settings and settings.showAlignmentDot == true)
-            .. " | shown=" .. tostring(centerDot and centerDot.IsShown and centerDot:IsShown() or false)
-            .. " | point=" .. FormatPoint(centerDot))
     end
 
     local reportText = table.concat(lines, "\n")

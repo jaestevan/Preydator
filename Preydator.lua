@@ -83,6 +83,7 @@ FILL_DIRECTION_UP = "up"
 FILL_DIRECTION_DOWN = "down"
 local FILL_INSET = 3
 local AMBUSH_ALERT_DURATION_SECONDS = 6
+local AMBUSH_SOUND_COOLDOWN_SECONDS = 45
 local QUEST_LISTEN_BURST_SECONDS = 6
 local ACTIVE_PREY_QUEST_CACHE_SECONDS = 0.75
 local AMBUSH_SOUND_ALERT = "alert"
@@ -436,6 +437,7 @@ local state = {
     preyTargetName = nil,
     preyTargetDifficulty = nil,
     ambushAlertUntil = 0,
+    lastAmbushSoundAt = 0,
     lastAmbushSystemMessage = nil,
     lastNotifiedPreyEndQuestID = nil,
     questListenUntil = 0,
@@ -502,6 +504,25 @@ end
 
 local function Clamp(value, minValue, maxValue)
     return math.max(minValue, math.min(maxValue, value))
+end
+
+local function RoundToStep(value, step)
+    if not step or step <= 0 then
+        return value
+    end
+
+    return math.floor((value / step) + 0.5) * step
+end
+
+local function NormalizeSliderValue(value, minValue, maxValue, step)
+    local numeric = tonumber(value)
+    if not numeric then
+        return nil
+    end
+
+    numeric = Clamp(numeric, minValue, maxValue)
+    numeric = RoundToStep(numeric, step)
+    return Clamp(numeric, minValue, maxValue)
 end
 
 local function Round(value)
@@ -1076,7 +1097,17 @@ local function RefreshInPreyZoneStatus(questID, force)
         return nil
     end
 
-    local shouldRefresh = force == true or state.inPreyZone == nil or state.zoneCacheDirty == true
+    local now = GetTime and GetTime() or 0
+    local staleFalseCheck = state.inPreyZone == false
+        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
+
+    if staleFalseCheck then
+        -- Force a map hierarchy rebuild during retry checks so we do not stay
+        -- stuck on a stale map snapshot after loading-screen transitions.
+        state.zoneCacheDirty = true
+    end
+
+    local shouldRefresh = force == true or state.inPreyZone == nil or state.zoneCacheDirty == true or staleFalseCheck
     if not shouldRefresh then
         return state.inPreyZone
     end
@@ -1096,6 +1127,7 @@ local function RefreshInPreyZoneStatus(questID, force)
     end
 
     state.inPreyZone = inPreyZone
+    state.lastZoneStatusRefreshAt = now
     return inPreyZone
 end
 
@@ -1438,6 +1470,40 @@ local function IsAmbushSystemMessage(message, sender)
     return false
 end
 
+local function IsRestrictedInstanceForPreyBar()
+    local inInstance = false
+    local instanceType = nil
+
+    if IsInInstance then
+        local ok, inInst, instType = pcall(IsInInstance)
+        if ok then
+            inInstance = inInst == true
+            instanceType = instType
+        end
+    end
+
+    if inInstance then
+        return instanceType == "party"
+            or instanceType == "raid"
+            or instanceType == "scenario"
+            or instanceType == "delve"
+    end
+
+    -- Fallback: some Delve transitions can report inconsistent IsInInstance states
+    -- while the player map is already a dungeon-type map.
+    if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
+        local playerMapID = C_Map.GetBestMapForUnit("player")
+        if playerMapID then
+            local mapInfo = C_Map.GetMapInfo(playerMapID)
+            if mapInfo and tonumber(mapInfo.mapType) == 4 then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 local function ShouldScanAmbushChat()
     if not state or not IsValidQuestID(state.activeQuestID) then
         return false
@@ -1452,19 +1518,7 @@ local function ShouldScanAmbushChat()
         return false
     end
 
-    if not IsInInstance then
-        return true
-    end
-
-    local ok, inInstance, instanceType = pcall(IsInInstance)
-    if not ok or not inInstance then
-        return true
-    end
-
-    return instanceType ~= "party"
-        and instanceType ~= "raid"
-        and instanceType ~= "scenario"
-        and instanceType ~= "delve"
+    return not IsRestrictedInstanceForPreyBar()
 end
 
 local function TriggerAmbushAlert(message, source)
@@ -1476,8 +1530,12 @@ local function TriggerAmbushAlert(message, source)
     end
 
     if settings.ambushSoundEnabled ~= false then
-        local ambushPath = ResolveAmbushAlertSoundPath()
-        TryPlaySound(ambushPath)
+        local nextSoundAt = (state.lastAmbushSoundAt or 0) + AMBUSH_SOUND_COOLDOWN_SECONDS
+        if now >= nextSoundAt then
+            local ambushPath = ResolveAmbushAlertSoundPath()
+            TryPlaySound(ambushPath)
+            state.lastAmbushSoundAt = now
+        end
     end
 
     AddDebugLog("Ambush", "Detected from " .. tostring(source) .. ": " .. tostring(message), true)
@@ -2523,12 +2581,15 @@ UpdateBarDisplay = function()
     local hasActiveQuest = state.activeQuestID ~= nil
     local forceKillStage = now < (state.killStageUntil or 0)
     local forceAmbushAlert = now < (state.ambushAlertUntil or 0)
-    local isOutOfPreyZone = hasActiveQuest and state.preyZoneMapID and state.inPreyZone == false
+    local isOutOfPreyZone = hasActiveQuest and state.inPreyZone == false
     local onlyShowInPreyZone = settings.onlyShowInPreyZone == true
     local editModePreview = settings.showInEditMode == true and IsEditModePreviewActive()
+    local isRestrictedInstance = IsRestrictedInstanceForPreyBar()
     local shouldShow = false
 
-    if state.forceShowBar or forceKillStage or forceAmbushAlert or editModePreview then
+    if isRestrictedInstance and not editModePreview then
+        shouldShow = false
+    elseif state.forceShowBar or forceKillStage or forceAmbushAlert or editModePreview then
         shouldShow = true
     elseif onlyShowInPreyZone then
         shouldShow = hasActiveQuest and not isOutOfPreyZone
@@ -2849,6 +2910,7 @@ local function ClearPreyStateAndDisplay()
     state.preyTargetName = nil
     state.preyTargetDifficulty = nil
     state.ambushAlertUntil = 0
+    state.lastAmbushSoundAt = 0
     state.lastAmbushSystemMessage = nil
 
     if UI.barFill then
@@ -4484,6 +4546,7 @@ local function ResetStateForNewQuest(questID)
         state.preyTooltipText = nil
         state.preyTargetName, state.preyTargetDifficulty = ExtractPreyTargetFromQuestTitle(questID)
         state.ambushAlertUntil = 0
+        state.lastAmbushSoundAt = 0
         state.lastAmbushSystemMessage = nil
     end
 end
@@ -4523,7 +4586,7 @@ local function UpdatePreyState()
         RefreshInPreyZoneStatus(questID, false)
 
         -- While out of prey zone, skip expensive widget/objective scans.
-        if state.preyZoneMapID and state.inPreyZone == false and not forceKillStage and not forceAmbushAlert then
+        if state.inPreyZone == false and not forceKillStage and not forceAmbushAlert then
             state.lastPercentSource = "none"
             state.preyTooltipText = nil
             ApplyDefaultPreyIconVisibility()
@@ -4654,6 +4717,7 @@ local function OnAddonLoaded()
     state.forceShowBar = settings.forceShowBar
 
     frame:RegisterEvent("PLAYER_LOGIN")
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     frame:RegisterEvent("UPDATE_UI_WIDGET")
     frame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
     frame:RegisterEvent("QUEST_TURNED_IN")
@@ -5497,6 +5561,9 @@ Preydator.API = {
     GetState = function()
         return state
     end,
+    Clamp = Clamp,
+    RoundToStep = RoundToStep,
+    NormalizeSliderValue = NormalizeSliderValue,
     ApplyBarSettings = ApplyBarSettings,
     UpdateBarDisplay = function()
         UpdateBarDisplay()

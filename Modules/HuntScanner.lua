@@ -144,6 +144,15 @@ local function SafeToString(value)
     return "<unprintable>"
 end
 
+local function SafeToNumber(value)
+    local ok, result = pcall(tonumber, value)
+    if ok and type(result) == "number" then
+        return result
+    end
+
+    return nil
+end
+
 local function SafeFindLiteral(text, needle)
     if type(text) ~= "string" or text == "" or type(needle) ~= "string" or needle == "" then
         return false
@@ -167,23 +176,6 @@ local function GetGossipOptionsSafe()
 end
 
 local function IsInRestrictedInstance()
-    local zoneGate = Preydator and Preydator.GetModule and Preydator:GetModule("ZoneGateV2")
-    local gateFn = zoneGate and zoneGate.IsInInstance
-    if type(gateFn) == "function" then
-        local ok, inInstance, instanceType = pcall(gateFn, zoneGate)
-        if ok then
-            if not inInstance then
-                return false
-            end
-            return instanceType == "pvp"
-                or instanceType == "arena"
-                or instanceType == "party"
-                or instanceType == "raid"
-                or instanceType == "scenario"
-                or instanceType == "delve"
-        end
-    end
-
     if type(IsInInstance) ~= "function" then
         return false
     end
@@ -636,7 +628,10 @@ local function ClearRewardCacheForDifficulty(difficulty)
     if type(storage.questDifficultyByID) == "table" then
         for questIDText, storedDifficulty in pairs(storage.questDifficultyByID) do
             if storedDifficulty == difficulty then
-                rewardCache[tonumber(questIDText)] = nil
+                local questID = SafeToNumber(questIDText)
+                if questID then
+                    rewardCache[questID] = nil
+                end
             end
         end
     end
@@ -645,7 +640,7 @@ local function ClearRewardCacheForDifficulty(difficulty)
 end
 
 local function RememberQuestDifficulty(questID, difficulty)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id or id < 1 or type(difficulty) ~= "string" or difficulty == "" then
         return
     end
@@ -655,7 +650,7 @@ local function RememberQuestDifficulty(questID, difficulty)
 end
 
 local function GetRememberedQuestDifficulty(questID)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id or id < 1 then
         return nil
     end
@@ -692,7 +687,7 @@ local function LoadRewardCaches()
     end
 
     for questIDText, rewards in pairs(storage.rewardCache or {}) do
-        local questID = tonumber(questIDText)
+        local questID = SafeToNumber(questIDText)
         if questID and type(rewards) == "table" then
             rewardCache[questID] = CopyStringList(rewards)
         end
@@ -709,14 +704,14 @@ end
 
 local function GetActivePreyQuestID()
     local state = GetCoreState()
-    local activeQuestID = tonumber(state and state.activeQuestID)
+    local activeQuestID = SafeToNumber(state and state.activeQuestID)
     if activeQuestID and activeQuestID > 0 then
         return activeQuestID
     end
 
     if C_QuestLog and type(C_QuestLog.GetActivePreyQuest) == "function" then
         local rawQuestID = C_QuestLog.GetActivePreyQuest()
-        local questID = tonumber(rawQuestID)
+        local questID = SafeToNumber(rawQuestID)
         if questID and questID > 0 then
             return questID
         end
@@ -1108,7 +1103,7 @@ local function FindPinByQuestID(questID)
 end
 
 local function OpenMapQuestDialog(questID)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id or id < 1 then
         return false
     end
@@ -1180,7 +1175,7 @@ local function OpenMapQuestDialog(questID)
 end
 
 local function AcceptMapQuest(questID)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id or id < 1 then
         return false
     end
@@ -2436,7 +2431,7 @@ local function RenderPanel(questRows)
         local data = questRows[index]
         if data then
             row:Show()
-            row.PreydatorQuestID = tonumber(data.questID)
+            row.PreydatorQuestID = SafeToNumber(data.questID)
             row.PreydatorName:SetText(data.title or "-")
             if row.PreydatorZone then
                 local showZone = not data.groupKey and data.zone and data.zone ~= "" and data.zone ~= L["Unknown"]
@@ -2826,7 +2821,7 @@ function HuntScannerModule:OnPreyQuestEnded(payload)
         return
     end
 
-    local questID = tonumber(payload.questID)
+    local questID = SafeToNumber(payload.questID)
     if not questID or questID < 1 then
         return
     end
@@ -2899,7 +2894,7 @@ function HuntScannerModule:GetAvailabilityCounts()
 end
 
 function HuntScannerModule:GetQuestZoneMapID(questID)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id then
         return nil
     end
@@ -2926,7 +2921,7 @@ function HuntScannerModule:GetQuestZoneMapID(questID)
 end
 
 function HuntScannerModule:GetQuestMetadata(questID)
-    local id = tonumber(questID)
+    local id = SafeToNumber(questID)
     if not id then
         return nil
     end
