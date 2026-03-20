@@ -131,6 +131,11 @@ local HUNT_SORT_OPTIONS = {
     title = { text = L["Title"] },
 }
 
+local HUNT_SORT_DIR_OPTIONS = {
+    asc = { text = L["Ascending"] },
+    desc = { text = L["Descending"] },
+}
+
 local HUNT_ALIGN_OPTIONS = {
     { key = "top", text = L["Top"] },
     { key = "middle", text = L["Middle"] },
@@ -325,115 +330,22 @@ local function CreateSectionTitle(parent, x, y, text)
 end
 
 local function CreateCheckbox(parent, x, y, label, getter, setter)
-    local check = CreateFrame("CheckButton", nil, parent, "InterfaceOptionsCheckButtonTemplate")
-    check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    check.Text:SetText(label)
-    check:SetChecked(getter() and true or false)
-    check:SetScript("OnClick", function(self)
-        setter(self:GetChecked() and true or false)
-    end)
-
-    function check:PreydatorRefresh()
-        self:SetChecked(getter() and true or false)
-    end
-
-    function check:PreydatorSetEnabled(enabled)
-        local isEnabled = enabled and true or false
-        self:SetAlpha(isEnabled and 1 or 0.45)
-        self:SetEnabled(isEnabled)
-        if self.EnableMouse then
-            self:EnableMouse(isEnabled)
-        end
-    end
-
-    return check
+    return api.CreateCheckboxControl(parent, x, y, label, getter, setter, {
+        withSetEnabled = true,
+    })
 end
 
 local function CreateSlider(parent, x, y, label, minValue, maxValue, step, getter, setter, formatValue)
-    local container = CreateFrame("Frame", nil, parent)
-    container:SetSize(CONTROL_WIDTH + 28, 56)
-    container:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-
-    local title = container:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", 0, 0)
-    title:SetText(label)
-
-    local slider = CreateFrame("Slider", nil, container, "OptionsSliderTemplate")
-    slider:SetPoint("TOPLEFT", 0, -18)
-    slider:SetWidth(DEFAULT_SLIDER_WIDTH)
-    slider:SetScale(DEFAULT_SLIDER_SCALE)
-    slider:SetMinMaxValues(minValue, maxValue)
-    slider:SetValueStep(step)
-    slider:SetObeyStepOnDrag(true)
-    if slider.Low then slider.Low:Hide() end
-    if slider.High then slider.High:Hide() end
-
-    local valueBox = CreateFrame("EditBox", nil, container, "InputBoxTemplate")
-    valueBox:SetSize(DEFAULT_SLIDER_VALUEBOX_WIDTH, DEFAULT_SLIDER_VALUEBOX_HEIGHT)
-    valueBox:SetPoint("LEFT", slider, "RIGHT", 12, 0)
-    valueBox:SetAutoFocus(false)
-    valueBox:SetTextInsets(6, 6, 0, 0)
-    valueBox:SetJustifyH("CENTER")
-
-    local formatter = formatValue or function(value)
-        if step < 1 then
-            return string.format("%.2f", value)
-        end
-        return tostring(math.floor(value + 0.5))
-    end
-
-    local function RefreshFromValue(rawValue)
-        local normalized = NormalizeSliderValue(rawValue, minValue, maxValue, step)
-        if normalized == nil then
-            normalized = getter()
-        end
-        slider:SetValue(normalized)
-        valueBox:SetText(formatter(normalized))
-    end
-
-    slider:SetScript("OnValueChanged", function(self, value)
-        local normalized = NormalizeSliderValue(value, minValue, maxValue, step)
-        if normalized == nil then
-            return
-        end
-
-        valueBox:SetText(formatter(normalized))
-        setter(normalized)
-    end)
-
-    valueBox:SetScript("OnEnterPressed", function(self)
-        local normalized = NormalizeSliderValue(self:GetText(), minValue, maxValue, step)
-        if normalized == nil then
-            self:SetText(formatter(getter()))
-            self:ClearFocus()
-            return
-        end
-
-        slider:SetValue(normalized)
-        self:ClearFocus()
-    end)
-
-    valueBox:SetScript("OnEditFocusLost", function(self)
-        self:SetText(formatter(getter()))
-    end)
-
-    function container:PreydatorRefresh()
-        RefreshFromValue(getter())
-    end
-
-    function container:PreydatorSetEnabled(enabled)
-        local isEnabled = enabled and true or false
-        self:SetAlpha(isEnabled and 1 or 0.45)
-        slider:SetEnabled(isEnabled)
-        valueBox:SetEnabled(isEnabled)
-        if valueBox.SetTextColor then
-            local channel = isEnabled and 1 or 0.65
-            valueBox:SetTextColor(channel, channel, channel)
-        end
-    end
-
-    container:PreydatorRefresh()
-    return container
+    return api.CreateSliderControl(parent, x, y, label, minValue, maxValue, step, getter, setter, formatValue, {
+        containerWidth = CONTROL_WIDTH + 28,
+        containerHeight = 56,
+        sliderWidth = DEFAULT_SLIDER_WIDTH,
+        sliderScale = DEFAULT_SLIDER_SCALE,
+        valueBoxWidth = DEFAULT_SLIDER_VALUEBOX_WIDTH,
+        valueBoxHeight = DEFAULT_SLIDER_VALUEBOX_HEIGHT,
+        valueBoxOffsetX = 12,
+        withSetEnabled = true,
+    })
 end
 
 local function CreateDropdown(parent, x, y, label, width, options, getter, setter)
@@ -1018,6 +930,29 @@ local function BuildHuntPage(owner, parent)
         owner:RefreshControls()
     end
 
+    local function PurgeHiddenWarbandCharacters()
+        local tracker = Preydator:GetModule("CurrencyTracker")
+        if tracker and type(tracker.PurgeHiddenWarbandCharacters) == "function" then
+            tracker:PurgeHiddenWarbandCharacters()
+        end
+        RefreshCurrencyTrackerPanel()
+        owner:RefreshControls()
+    end
+
+    local function SetAllWarbandCharactersShown(shown)
+        local tracker = Preydator:GetModule("CurrencyTracker")
+        if tracker and type(tracker.SetAllWarbandCharactersShown) == "function" then
+            tracker:SetAllWarbandCharactersShown(shown)
+        else
+            db.currencyWarbandCharacterVisibility = db.currencyWarbandCharacterVisibility or {}
+            for _, entry in ipairs(GetKnownWarbandCharacters()) do
+                db.currencyWarbandCharacterVisibility[entry.charKey] = shown and true or false
+            end
+            RefreshCurrencyTrackerPanel()
+        end
+        owner:RefreshControls()
+    end
+
     local knownCharacters = GetKnownWarbandCharacters()
     local contentHeight = math.max(1428, 1108 + (math.ceil(#knownCharacters / 2) * 28))
 
@@ -1105,7 +1040,13 @@ local function BuildHuntPage(owner, parent)
         db.huntScannerSortBy = key
         RefreshHuntTrackerPanel()
     end))
-    TrackHuntControl(CreateDropdown(content, COLUMN_LEFT_X, -236, L["Anchor Align"], 170, HUNT_ALIGN_OPTIONS, function()
+    TrackHuntControl(CreateDropdown(content, COLUMN_LEFT_X, -236, L["Sort Direction"], 170, HUNT_SORT_DIR_OPTIONS, function()
+        return db.huntScannerSortDir or "asc"
+    end, function(key)
+        db.huntScannerSortDir = (key == "desc") and "desc" or "asc"
+        RefreshHuntTrackerPanel()
+    end))
+    TrackHuntControl(CreateDropdown(content, COLUMN_LEFT_X, -288, L["Anchor Align"], 170, HUNT_ALIGN_OPTIONS, function()
         return db.huntScannerAnchorAlign or "top"
     end, function(key)
         db.huntScannerAnchorAlign = (key == "middle" or key == "bottom") and key or "top"
@@ -1127,7 +1068,7 @@ local function BuildHuntPage(owner, parent)
         self:SetText((db.huntScannerPreviewInOptions == true) and L["Hide Preview Pane"] or L["Show Preview Pane"])
     end
 
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -80, L["Hunt Panel Width"], 280, 620, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -104, L["Hunt Panel Width"], 280, 620, 1, function()
         return db.huntScannerWidth or 336
     end, function(value)
         db.huntScannerWidth = math.floor(value + 0.5)
@@ -1135,7 +1076,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -132, L["Hunt Panel Height"], 320, 900, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -156, L["Hunt Panel Height"], 320, 900, 1, function()
         return db.huntScannerHeight or 460
     end, function(value)
         db.huntScannerHeight = math.floor(value + 0.5)
@@ -1144,7 +1085,7 @@ local function BuildHuntPage(owner, parent)
         return tostring(math.floor(value + 0.5))
     end))
 
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -184, L["Hunt Panel Scale"], 0.70, 1.60, 0.05, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -208, L["Hunt Panel Scale"], 0.70, 1.60, 0.05, function()
         return db.huntScannerScale or 1.00
     end, function(value)
         db.huntScannerScale = value
@@ -1152,7 +1093,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return string.format("%.2f", value)
     end))
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -236, L["Hunt Panel Font Size"], 10, 24, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -260, L["Hunt Panel Font Size"], 10, 24, 1, function()
         return db.huntScannerFontSize or 12
     end, function(value)
         db.huntScannerFontSize = math.floor(value + 0.5)
@@ -1160,7 +1101,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackHuntControl(CreateCheckbox(content, COLUMN_RIGHT_X, -264, L["Show Quest Reward Icons"], function()
+    TrackHuntControl(CreateCheckbox(content, COLUMN_RIGHT_X, -292, L["Show Quest Reward Icons"], function()
         return db.huntScannerShowRewardIcons ~= false
     end, function(value)
         db.huntScannerShowRewardIcons = value and true or false
@@ -1168,28 +1109,28 @@ local function BuildHuntPage(owner, parent)
     end))
 
     -- Currency section
-    CreateSectionTitle(content, COLUMN_LEFT_X, -302, L["Currency Panel"])
-    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -302, 180, L["Open Currency"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -334, L["Currency Panel"])
+    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -334, 180, L["Open Currency"], function()
         ToggleCurrencyPanel()
     end)
     TrackCurrencyControl(currencyToggleButton)
     currencyToggleButton.PreydatorRefresh = function(self)
         self:SetText((db.currencyWindowEnabled == true) and L["Close Currency"] or L["Open Currency"])
     end
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -332, L["Show Random Hunts Available"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -364, L["Show Random Hunts Available"], function()
         return db.currencyShowAffordableHunts == true
     end, function(value)
         db.currencyShowAffordableHunts = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -360, L["Hide Currency in Instance"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -392, L["Hide Currency in Instance"], function()
         return db.currencyWindowHideInInstance == true
     end, function(value)
         db.currencyWindowHideInInstance = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
 
-    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -394, L["Gain Color"], function()
+    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -426, L["Gain Color"], function()
         return db.currencyDeltaGainColor or { 0.15, 0.9, 0.35, 1 }
     end, function(color)
         db.currencyDeltaGainColor = { color[1], color[2], color[3], color[4] }
@@ -1354,7 +1295,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -650, L["Warband Height"], 140, 800, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -650, L["Warband Height"], 80, 600, 1, function()
         return db.currencyWarbandHeight or 250
     end, function(value)
         db.currencyWarbandHeight = math.floor(value + 0.5)
@@ -1380,6 +1321,12 @@ local function BuildHuntPage(owner, parent)
     end))
 
     CreateSectionTitle(content, COLUMN_LEFT_X, -854, L["Characters in Tracker"])
+    TrackWarbandControl(CreateActionButton(content, COLUMN_LEFT_X, -854, 180, L["Select All Characters"], function()
+        SetAllWarbandCharactersShown(true)
+    end))
+    TrackWarbandControl(CreateActionButton(content, COLUMN_RIGHT_X, -854, 200, L["Remove Unchecked Characters"], function()
+        PurgeHiddenWarbandCharacters()
+    end))
     for index, entry in ipairs(knownCharacters) do
         local level = tonumber(entry.level)
         local levelSuffix = level and string.format(" (L%d)", level) or ""
@@ -1463,7 +1410,7 @@ local function BuildWarbandPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    RegisterRefresher(owner, CreateSlider(parent, COLUMN_LEFT_X, -148, L["Warband Height"], 140, 800, 1, function()
+    RegisterRefresher(owner, CreateSlider(parent, COLUMN_LEFT_X, -148, L["Warband Height"], 80, 600, 1, function()
         return db.currencyWarbandHeight or 250
     end, function(value)
         db.currencyWarbandHeight = math.floor(value + 0.5)

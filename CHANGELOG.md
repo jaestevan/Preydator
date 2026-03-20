@@ -2,8 +2,33 @@
 
 ## 2.0.2 - 2026-03-20
 
+### Fixed
+- Bar drag position now persists reliably across reloads. Added resilient backup sync for saved bar coordinates and load-time restoration so position no longer snaps back to default `y=472` after moving.
+- Corrected bar position restore order on load so backup coordinates are restored before normalization and not overwritten during startup.
+- **Critical:** Bar visibility broken for non-enUS clients due to localization-dependent difficulty keys in hunted rewards and counts caching.
+  - Root cause: `ParseDifficulty` was returning localized strings (`L["Normal"]`, `L["Hard"]`, `L["Nightmare"]`) which were then used as dictionary keys in persisted `difficultyRewardCache`, `questDifficultyByID`, and snapshot `mapDifficultyCounts`.
+  - When players switched client locales or used addon with different locale clients, cached data keys became invalid because localization strings differ by language (enUS `"Normal"` vs deDE varies, etc.).
+  - Solution: Changed `ParseDifficulty` to return canonical non-localized names (`"normal"`, `"hard"`, `"nightmare"`) for all internal data structures;  added `GetDifficultyDisplayName()` for UI display purposes; implemented `MigrateDifficultyKeysFromLocalizedToCanonical()` to convert existing persisted data on load.
+  - Data flow now: WoW API → `ParseDifficulty` (canonical) → stored/cached (canonical) → migrated on load (canonical old → canonical new) → `GetDifficultyDisplayName` for UI display (localized labels).
+- HuntScanner no longer queues or processes hunt-table snapshot work while the player is inside restricted instance content (`party`, `raid`, `scenario`, `delve`, `pvp`, `arena`).
+- Ambush chat scanning now requires a fresh live prey quest match and refreshes zone state before evaluating prey-zone ambush logic, preventing stale prey state from firing inside delves or after prey context has ended.
+- Hunt Table difficulty sorting now uses canonical difficulty rank instead of alphabetic string order, so ordering is consistently `N/H/Ni` (least to most) rather than locale/text-dependent variants.
+- Currency and Warband windows now use stronger opacity and explicit frame layering so overlap does not visually blend the two panels into one block.
+
 ### Changed
 - Ambush sound alerts now use a 45-second cooldown between plays to prevent rapid repeat firing from clustered ambush chat events.
+- Stage-4 click navigation now prefers super-tracking the active prey quest (default-icon style behavior) and only falls back to user map waypoint pinning when quest super-track APIs are unavailable.
+- Bar defaults updated: default position now uses `x=0` and `y=472`, and the bar is locked by default again.
+- Hunt Table group headers now order difficulty groups hardest-first (`Nightmare > Hard > Normal`) when grouped by difficulty.
+- Edit Mode window now anchors to the right side of Blizzard HUD Edit Mode with the same offset values.
+
+### Fixed
+- Warband Prey Track (`N/H/Ni`) now uses account-shared availability propagation with level gating, so updates captured on one character are reflected across all characters.
+- Weekly reset fallback now reinitializes prey availability correctly by level: `78-89 => 4/-/-`, `90+ => 4/4/-` (or `4/4/4` once Nightmare has been permanently unlocked on the account).
+- Added permanent saved unlock behavior for Nightmare in currency DB fallback logic; once unlocked, post-reset level-90 snapshots keep Nightmare availability enabled.
+
+### Changed
+- Corrected the fallback Warband prey model so live availability remains per-character, while only Nightmare unlock is shared account-wide.
 
 ## 2.0.1 - 2026-03-20
 

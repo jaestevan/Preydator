@@ -15,6 +15,20 @@ local function IsFrameMouseOver(frame)
     return frame and frame.IsMouseOver and frame:IsMouseOver()
 end
 
+local function AnchorEditModeWindow(window)
+    if not window then
+        return
+    end
+
+    local editModeFrame = _G.EditModeManagerFrame
+    window:ClearAllPoints()
+    if editModeFrame and editModeFrame.IsShown and editModeFrame:IsShown() then
+        window:SetPoint("BOTTOMRIGHT", editModeFrame, "BOTTOMRIGHT", -520, 0)
+    else
+        window:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 0)
+    end
+end
+
 local function Clamp(value, minValue, maxValue)
     if api and type(api.Clamp) == "function" then
         return api.Clamp(value, minValue, maxValue)
@@ -22,105 +36,28 @@ local function Clamp(value, minValue, maxValue)
     return math.max(minValue, math.min(maxValue, value))
 end
 
-local function NormalizeSliderValue(value, minValue, maxValue, step)
-    if api and type(api.NormalizeSliderValue) == "function" then
-        return api.NormalizeSliderValue(value, minValue, maxValue, step)
-    end
-
-    local numeric = tonumber(value)
-    if not numeric then
-        return nil
-    end
-
-    numeric = Clamp(numeric, minValue, maxValue)
-    if step and step > 0 then
-        numeric = math.floor((numeric / step) + 0.5) * step
-    end
-    return Clamp(numeric, minValue, maxValue)
-end
-
 local function CreateCheckbox(parent, x, y, label, getter, setter)
-    local checkbox = CreateFrame("CheckButton", nil, parent, "InterfaceOptionsCheckButtonTemplate")
-    checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    checkbox.Text:SetText(label)
-    checkbox:SetChecked(getter() and true or false)
-    checkbox:SetScript("OnClick", function(self)
-        setter(self:GetChecked() and true or false)
-    end)
-
-    function checkbox:PreydatorRefresh()
-        self:SetChecked(getter() and true or false)
-    end
-
-    return checkbox
+    return api.CreateCheckboxControl(parent, x, y, label, getter, setter)
 end
 
 local function CreateSlider(parent, x, y, label, minValue, maxValue, step, getter, setter, formatter)
-    local container = CreateFrame("Frame", nil, parent)
-    container:SetSize(250, 54)
-    container:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    return api.CreateSliderControl(parent, x, y, label, minValue, maxValue, step, getter, setter, formatter, {
+        containerWidth = 250,
+        containerHeight = 54,
+        sliderWidth = 165,
+        valueBoxWidth = 52,
+        valueBoxHeight = 20,
+        valueBoxOffsetX = 10,
+    })
+end
 
-    local title = container:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", 0, 0)
-    title:SetText(label)
-
-    local slider = CreateFrame("Slider", nil, container, "OptionsSliderTemplate")
-    slider:SetPoint("TOPLEFT", 0, -18)
-    slider:SetWidth(165)
-    slider:SetMinMaxValues(minValue, maxValue)
-    slider:SetValueStep(step)
-    slider:SetObeyStepOnDrag(true)
-    if slider.Low then slider.Low:Hide() end
-    if slider.High then slider.High:Hide() end
-
-    local valueBox = CreateFrame("EditBox", nil, container, "InputBoxTemplate")
-    valueBox:SetSize(52, 20)
-    valueBox:SetPoint("LEFT", slider, "RIGHT", 10, 0)
-    valueBox:SetAutoFocus(false)
-    valueBox:SetTextInsets(6, 6, 0, 0)
-    valueBox:SetJustifyH("CENTER")
-
-    local formatValue = formatter or function(value)
-        if step < 1 then
-            return string.format("%.2f", value)
-        end
-        return tostring(math.floor(value + 0.5))
-    end
-
-    slider:SetScript("OnValueChanged", function(self, value)
-        local normalized = NormalizeSliderValue(value, minValue, maxValue, step)
-        if normalized == nil then
-            return
-        end
-
-        valueBox:SetText(formatValue(normalized))
-        setter(normalized)
-    end)
-
-    valueBox:SetScript("OnEnterPressed", function(self)
-        local normalized = NormalizeSliderValue(self:GetText(), minValue, maxValue, step)
-        if normalized == nil then
-            self:SetText(formatValue(getter()))
-            self:ClearFocus()
-            return
-        end
-
-        slider:SetValue(normalized)
-        self:ClearFocus()
-    end)
-
-    valueBox:SetScript("OnEditFocusLost", function(self)
-        self:SetText(formatValue(getter()))
-    end)
-
-    function container:PreydatorRefresh()
-        local value = getter()
-        slider:SetValue(value)
-        valueBox:SetText(formatValue(value))
-    end
-
-    container:PreydatorRefresh()
-    return container
+local function CreateActionButton(parent, x, y, width, text, onClick)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetSize(width, 24)
+    button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    button:SetText(text)
+    button:SetScript("OnClick", onClick)
+    return button
 end
 
 function EditModeModule:RefreshControls()
@@ -140,8 +77,8 @@ function EditModeModule:CreateWindow()
     local db = api.GetSettings()
     local window = CreateFrame("Frame", "PreydatorEditModeSettings", UIParent, "BackdropTemplate")
     window:SetSize(430, 390)
-    window:SetPoint("CENTER", UIParent, "CENTER", 260, 0)
-    window:SetFrameStrata("DIALOG")
+    AnchorEditModeWindow(window)
+    window:SetFrameStrata("MEDIUM")
     window:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -160,7 +97,7 @@ function EditModeModule:CreateWindow()
 
     local dismissFrame = CreateFrame("Frame", nil, UIParent)
     dismissFrame:SetAllPoints(UIParent)
-    dismissFrame:SetFrameStrata("DIALOG")
+    dismissFrame:SetFrameStrata("MEDIUM")
     dismissFrame:SetFrameLevel(math.max(1, window:GetFrameLevel() - 1))
     dismissFrame:EnableMouse(true)
     if dismissFrame.SetPropagateMouseClicks then
@@ -209,6 +146,9 @@ function EditModeModule:CreateWindow()
         api.NormalizeDisplaySettings()
         api.UpdateBarDisplay()
     end)
+    self.controls[#self.controls + 1] = CreateActionButton(window, 18, -136, 170, L["Reset Bar Position"], function()
+        api.ResetBarPosition()
+    end)
 
     self.controls[#self.controls + 1] = CreateSlider(window, 18, -184, L["Scale"], 0.5, 2, 0.05, function() return db.scale end, function(value)
         db.scale = value
@@ -240,6 +180,7 @@ function EditModeModule:ShowWindow()
     end
 
     local window = self:CreateWindow()
+    AnchorEditModeWindow(window)
     self:RefreshControls()
     if self.dismissFrame then
         self.dismissFrame:Show()

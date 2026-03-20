@@ -145,7 +145,7 @@ local IsValidQuestID
 local ShouldSuppressDefaultPreyEncounter
 
 local DEFAULTS = {
-    point = { anchor = "CENTER", relativePoint = "CENTER", x = 0, y = -200 },
+    point = { anchor = "CENTER", relativePoint = "CENTER", x = 0, y = 472 },
     width = 160,
     height = 30,
     horizontalWidth = 160,
@@ -155,7 +155,7 @@ local DEFAULTS = {
     scale = 0.9,
     verticalScale = 0.9,
     fontSize = 12,
-    locked = false,
+    locked = true,
     forceShowBar = false,
     onlyShowInPreyZone = false,
     disableDefaultPreyIcon = false,
@@ -253,6 +253,7 @@ local DEFAULTS = {
     huntScannerTheme = "brown",
     huntScannerGroupBy = "difficulty",
     huntScannerSortBy = "zone",
+    huntScannerSortDir = "asc",
     huntScannerWidth = 336,
     huntScannerHeight = 460,
     huntScannerFontSize = 12,
@@ -403,6 +404,7 @@ local AddDebugLog
 local TryPlaySound
 local TryPlayStageSound
 local UpdateBarDisplay
+local ApplyBarSettings
 local ApplyDefaultPreyIconVisibility
 local TryOpenPreyQuestOnMap
 
@@ -525,12 +527,165 @@ local function NormalizeSliderValue(value, minValue, maxValue, step)
     return Clamp(numeric, minValue, maxValue)
 end
 
+local function CreateCheckboxControl(parent, x, y, label, getter, setter, options)
+    options = type(options) == "table" and options or {}
+
+    local check = CreateFrame("CheckButton", nil, parent, "InterfaceOptionsCheckButtonTemplate")
+    check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    check.Text:SetText(label)
+    check:SetChecked(getter() and true or false)
+    check:SetScript("OnClick", function(self)
+        setter(self:GetChecked() and true or false)
+    end)
+
+    function check:PreydatorRefresh()
+        self:SetChecked(getter() and true or false)
+    end
+
+    if options.withSetEnabled == true then
+        function check:PreydatorSetEnabled(enabled)
+            local isEnabled = enabled and true or false
+            self:SetAlpha(isEnabled and 1 or 0.45)
+            self:SetEnabled(isEnabled)
+            if self.EnableMouse then
+                self:EnableMouse(isEnabled)
+            end
+        end
+    end
+
+    return check
+end
+
+local function CreateSliderControl(parent, x, y, label, minValue, maxValue, step, getter, setter, formatValue, options)
+    options = type(options) == "table" and options or {}
+
+    local container = CreateFrame("Frame", nil, parent)
+    container:SetSize(options.containerWidth or 250, options.containerHeight or 54)
+    container:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+
+    local title = container:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOPLEFT", 0, 0)
+    title:SetText(label)
+
+    local slider = CreateFrame("Slider", nil, container, "OptionsSliderTemplate")
+    slider:SetPoint("TOPLEFT", 0, -18)
+    slider:SetWidth(options.sliderWidth or 165)
+    slider:SetScale(options.sliderScale or 1)
+    slider:SetMinMaxValues(minValue, maxValue)
+    slider:SetValueStep(step)
+    slider:SetObeyStepOnDrag(true)
+    if slider.Low then slider.Low:Hide() end
+    if slider.High then slider.High:Hide() end
+
+    local valueBox = CreateFrame("EditBox", nil, container, "InputBoxTemplate")
+    valueBox:SetSize(options.valueBoxWidth or 52, options.valueBoxHeight or 20)
+    valueBox:SetPoint("LEFT", slider, "RIGHT", options.valueBoxOffsetX or 10, 0)
+    valueBox:SetAutoFocus(false)
+    valueBox:SetTextInsets(6, 6, 0, 0)
+    valueBox:SetJustifyH("CENTER")
+
+    local formatter = formatValue or function(value)
+        if step and step < 1 then
+            return string.format("%.2f", value)
+        end
+        return tostring(math.floor(value + 0.5))
+    end
+
+    local function RefreshFromValue(rawValue)
+        local normalized = NormalizeSliderValue(rawValue, minValue, maxValue, step)
+        if normalized == nil then
+            normalized = getter()
+        end
+        slider:SetValue(normalized)
+        valueBox:SetText(formatter(normalized))
+    end
+
+    slider:SetScript("OnValueChanged", function(_, value)
+        local normalized = NormalizeSliderValue(value, minValue, maxValue, step)
+        if normalized == nil then
+            return
+        end
+
+        valueBox:SetText(formatter(normalized))
+        setter(normalized)
+    end)
+
+    valueBox:SetScript("OnEnterPressed", function(self)
+        local normalized = NormalizeSliderValue(self:GetText(), minValue, maxValue, step)
+        if normalized == nil then
+            self:SetText(formatter(getter()))
+            self:ClearFocus()
+            return
+        end
+
+        slider:SetValue(normalized)
+        self:ClearFocus()
+    end)
+
+    valueBox:SetScript("OnEditFocusLost", function(self)
+        self:SetText(formatter(getter()))
+    end)
+
+    function container:PreydatorRefresh()
+        RefreshFromValue(getter())
+    end
+
+    if options.withSetEnabled == true then
+        function container:PreydatorSetEnabled(enabled)
+            local isEnabled = enabled and true or false
+            self:SetAlpha(isEnabled and 1 or 0.45)
+            slider:SetEnabled(isEnabled)
+            valueBox:SetEnabled(isEnabled)
+            if valueBox.SetTextColor then
+                local channel = isEnabled and 1 or 0.65
+                valueBox:SetTextColor(channel, channel, channel)
+            end
+        end
+    end
+
+    container:PreydatorRefresh()
+    return container
+end
+
 local function Round(value)
     if value >= 0 then
         return math.floor(value + 0.5)
     end
 
     return math.ceil(value - 0.5)
+end
+
+local function SyncBarPointToBackup()
+    if not settings or type(settings.point) ~= "table" then
+        return
+    end
+
+    local x = tonumber(settings.point.x)
+    local y = tonumber(settings.point.y)
+    if x == nil or y == nil then
+        return
+    end
+
+    settings.barPointX = Round(x)
+    settings.barPointY = Round(y)
+end
+
+local function RestoreBarPointFromBackup()
+    if not settings then
+        return
+    end
+
+    local x = tonumber(settings.barPointX)
+    local y = tonumber(settings.barPointY)
+    if x == nil or y == nil then
+        return
+    end
+
+    settings.point = settings.point or {}
+    settings.point.anchor = "CENTER"
+    settings.point.relativePoint = "CENTER"
+    settings.point.x = Round(x)
+    settings.point.y = Round(y)
 end
 
 local function NormalizeLabelSettings()
@@ -759,6 +914,18 @@ local function NormalizeDisplaySettings()
     else
         settings.width = settings.horizontalWidth
         settings.height = settings.horizontalHeight
+    end
+
+    if type(settings.point) ~= "table" then
+        settings.point = {}
+    end
+    settings.point.anchor = "CENTER"
+    settings.point.relativePoint = "CENTER"
+    if settings.point.x ~= nil then
+        settings.point.x = Round(tonumber(settings.point.x) or 0)
+    end
+    if settings.point.y ~= nil then
+        settings.point.y = Round(tonumber(settings.point.y) or 0)
     end
 
     if type(settings.stageSuffixLabels) ~= "table" then
@@ -1505,13 +1672,27 @@ local function IsRestrictedInstanceForPreyBar()
 end
 
 local function ShouldScanAmbushChat()
-    if not state or not IsValidQuestID(state.activeQuestID) then
+    if not state then
+        return false
+    end
+
+    local liveQuestID = GetCurrentActivePreyQuestCached(0)
+    if not IsValidQuestID(liveQuestID) then
+        return false
+    end
+
+    if state.activeQuestID ~= liveQuestID then
+        state.zoneCacheDirty = true
         return false
     end
 
     -- Ambush detection is only relevant before final stage and while in prey zone.
     if tonumber(state.stage) == MAX_STAGE then
         return false
+    end
+
+    if state.zoneCacheDirty == true or state.inPreyZone == nil then
+        RefreshInPreyZoneStatus(liveQuestID, true)
     end
 
     if state.inPreyZone ~= true then
@@ -1708,7 +1889,68 @@ TryPlayStageSound = function(stage, ignoreSoundToggle)
     return false
 end
 
-local function ApplyBarSettings()
+local barPositionUtil = {
+    defaultX = 0,
+    defaultY = 472,
+}
+
+function barPositionUtil.GetDefaultPoint(frameWidth, frameHeight)
+    return barPositionUtil.defaultX, barPositionUtil.defaultY
+end
+
+function barPositionUtil.ClampToScreen(x, y, frameWidth, frameHeight)
+    local parentWidth = UIParent and UIParent.GetWidth and UIParent:GetWidth() or 0
+    local parentHeight = UIParent and UIParent.GetHeight and UIParent:GetHeight() or 0
+    local width = math.max(1, tonumber(frameWidth) or 0)
+    local height = math.max(1, tonumber(frameHeight) or 0)
+    local margin = 8
+
+    if parentWidth <= 0 or parentHeight <= 0 then
+        local defaultX, defaultY = barPositionUtil.GetDefaultPoint(width, height)
+        return Round(tonumber(x) or defaultX), Round(tonumber(y) or defaultY)
+    end
+
+    local maxX = math.max(0, math.floor(((parentWidth - width) / 2) - margin))
+    local maxY = math.max(0, math.floor(((parentHeight - height) / 2) - margin))
+    local defaultX, defaultY = barPositionUtil.GetDefaultPoint(width, height)
+    local clampedX = Clamp(Round(tonumber(x) or defaultX), -maxX, maxX)
+    local clampedY = Clamp(Round(tonumber(y) or defaultY), -maxY, maxY)
+    return clampedX, clampedY
+end
+
+function barPositionUtil.GetCurrentDimensions()
+    local orientation = settings and settings.orientation or ORIENTATION_HORIZONTAL
+    local frameScale
+    local baseWidth
+    local baseHeight
+
+    if orientation == ORIENTATION_VERTICAL then
+        frameScale = Clamp(tonumber(settings and settings.verticalScale) or DEFAULTS.verticalScale, 0.5, 2)
+        baseWidth = Clamp(math.floor((tonumber(settings and settings.verticalWidth) or DEFAULTS.verticalWidth) + 0.5), 10, 60)
+        baseHeight = Clamp(math.floor((tonumber(settings and settings.verticalHeight) or DEFAULTS.verticalHeight) + 0.5), 100, 350)
+    else
+        frameScale = Clamp(tonumber(settings and settings.scale) or DEFAULTS.scale, 0.5, 2)
+        baseWidth = Clamp(math.floor((tonumber(settings and settings.horizontalWidth) or DEFAULTS.horizontalWidth) + 0.5), 100, 350)
+        baseHeight = Clamp(math.floor((tonumber(settings and settings.horizontalHeight) or DEFAULTS.horizontalHeight) + 0.5), 10, 60)
+    end
+
+    return math.max(1, Round(baseWidth * frameScale)), math.max(1, Round(baseHeight * frameScale))
+end
+
+function barPositionUtil.Reset()
+    settings.point = settings.point or {}
+    settings.point.anchor = "CENTER"
+    settings.point.relativePoint = "CENTER"
+
+    local width, height = barPositionUtil.GetCurrentDimensions()
+    settings.point.x, settings.point.y = barPositionUtil.GetDefaultPoint(width, height)
+    SyncBarPointToBackup()
+
+    ApplyBarSettings()
+    UpdateBarDisplay()
+end
+
+ApplyBarSettings = function()
     if not UI.barFrame then
         return
     end
@@ -1751,10 +1993,14 @@ local function ApplyBarSettings()
         relativePoint = "CENTER"
     end
 
-    point.x = Round(tonumber(point.x) or DEFAULTS.point.x)
-    point.y = Round(tonumber(point.y) or DEFAULTS.point.y)
+    if point.x == nil or point.y == nil then
+        point.x, point.y = barPositionUtil.GetDefaultPoint(scaledWidth, scaledHeight)
+    end
+
+    point.x, point.y = barPositionUtil.ClampToScreen(point.x, point.y, scaledWidth, scaledHeight)
     point.anchor = anchor
     point.relativePoint = relativePoint
+    SyncBarPointToBackup()
 
     if orientation == ORIENTATION_VERTICAL then
         settings.verticalScale = frameScale
@@ -1764,6 +2010,8 @@ local function ApplyBarSettings()
 
     UI.barFrame:SetSize(scaledWidth, scaledHeight)
     UI.barFrame:SetScale(1)
+    UI.barFrame:SetFrameStrata("MEDIUM")
+    UI.barFrame:SetFrameLevel(5)
     UI.barFrame:ClearAllPoints()
     UI.barFrame:SetPoint("CENTER", UIParent, "CENTER", point.x, point.y)
 
@@ -2118,9 +2366,14 @@ local function EnsureBar()
     end
 
     createdBar:SetSize(260, 18)
-    createdBar:SetPoint("CENTER", UIParent, "CENTER", 0, -220)
+    createdBar:SetFrameStrata("MEDIUM")
+    createdBar:SetFrameLevel(5)
+    do
+        local defaultX, defaultY = barPositionUtil.GetDefaultPoint(260, 18)
+        createdBar:SetPoint("CENTER", UIParent, "CENTER", defaultX, defaultY)
+    end
     createdBar:Hide()
-    createdBar:SetClampedToScreen(false)
+    createdBar:SetClampedToScreen(true)
     createdBar:RegisterForDrag("LeftButton")
     UI.barFrame = createdBar
 
@@ -2128,17 +2381,24 @@ local function EnsureBar()
         settings.point.anchor = "CENTER"
         settings.point.relativePoint = "CENTER"
 
+        local frameWidth = self and self.GetWidth and self:GetWidth() or 0
+        local frameHeight = self and self.GetHeight and self:GetHeight() or 0
+
         local frameCenterX, frameCenterY = self:GetCenter()
         local parentCenterX, parentCenterY = UIParent:GetCenter()
         if frameCenterX and frameCenterY and parentCenterX and parentCenterY then
-            settings.point.x = Round(frameCenterX - parentCenterX)
-            settings.point.y = Round(frameCenterY - parentCenterY)
+            settings.point.x, settings.point.y = barPositionUtil.ClampToScreen(frameCenterX - parentCenterX, frameCenterY - parentCenterY, frameWidth, frameHeight)
+            SyncBarPointToBackup()
+            self:ClearAllPoints()
+            self:SetPoint("CENTER", UIParent, "CENTER", settings.point.x, settings.point.y)
             return
         end
 
         local _, _, _, x, y = self:GetPoint(1)
-        settings.point.x = Round(tonumber(x) or DEFAULTS.point.x)
-        settings.point.y = Round(tonumber(y) or DEFAULTS.point.y)
+        settings.point.x, settings.point.y = barPositionUtil.ClampToScreen(x, y, frameWidth, frameHeight)
+        SyncBarPointToBackup()
+        self:ClearAllPoints()
+        self:SetPoint("CENTER", UIParent, "CENTER", settings.point.x, settings.point.y)
     end
 
     UI.barFrame:SetScript("OnMouseDown", function(self, button)
@@ -3280,6 +3540,12 @@ TryOpenPreyQuestOnMap = function()
     end
 
     local questID = state.activeQuestID
+    local superTrackedQuest = false
+
+    if C_SuperTrack and type(C_SuperTrack.SetSuperTrackedQuestID) == "function" then
+        local ok = pcall(C_SuperTrack.SetSuperTrackedQuestID, questID)
+        superTrackedQuest = ok == true
+    end
 
     if OpenQuestMap then
         pcall(OpenQuestMap)
@@ -3293,13 +3559,17 @@ TryOpenPreyQuestOnMap = function()
         pcall(QuestMapFrame_OpenToQuestDetails, questID)
     end
 
-    local mapID, x, y = TryGetPreyQuestWaypoint(questID)
-    if mapID and x and y and C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates then
-        local waypointPoint = UiMapPoint.CreateFromCoordinates(mapID, x, y)
-        if waypointPoint then
-            C_Map.SetUserWaypoint(waypointPoint)
-            if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
-                C_SuperTrack.SetSuperTrackedUserWaypoint(true)
+    -- Prefer quest super-tracking (same behavior as clicking the default icon).
+    -- Fall back to user waypoint only when quest super-track API is unavailable.
+    if not superTrackedQuest then
+        local mapID, x, y = TryGetPreyQuestWaypoint(questID)
+        if mapID and x and y and C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates then
+            local waypointPoint = UiMapPoint.CreateFromCoordinates(mapID, x, y)
+            if waypointPoint then
+                C_Map.SetUserWaypoint(waypointPoint)
+                if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+                    C_SuperTrack.SetSuperTrackedUserWaypoint(true)
+                end
             end
         end
     end
@@ -4105,6 +4375,11 @@ local function CollectWidgetTreeSnapshot(rootFrame, maxEntries)
 end
 
 local function SendInspectReportToErrorHandler(reportText)
+    -- Legacy inspect path is intentionally disabled while we validate module-only diagnostics.
+    if true then
+        return false, "legacy inspect reporter disabled"
+    end
+
     local function SafeToString(value)
         local ok, converted = pcall(tostring, value)
         if ok then
@@ -4150,6 +4425,12 @@ local function SendInspectReportToErrorHandler(reportText)
 end
 
 local function PrintInspectState(outputMode)
+    -- Keep this function in place for compatibility, but route users to module inspect.
+    if true then
+        print("Preydator: Legacy inspect path is disabled. Use '/pd inspect' from DebugInspect.")
+        return
+    end
+
     outputMode = string.lower(tostring(outputMode or "chat"))
     EnsureBar()
     UpdateBarDisplay()
@@ -4708,7 +4989,9 @@ local function OnAddonLoaded()
     NormalizeSoundSettings()
     NormalizeLabelSettings()
     NormalizeColorSettings()
+    RestoreBarPointFromBackup()
     NormalizeDisplaySettings()
+    SyncBarPointToBackup()
     NormalizeProgressSettings()
     NormalizeAmbushSettings()
     ApplyDefaultPreyIconVisibility()
@@ -5564,6 +5847,8 @@ Preydator.API = {
     Clamp = Clamp,
     RoundToStep = RoundToStep,
     NormalizeSliderValue = NormalizeSliderValue,
+    CreateCheckboxControl = CreateCheckboxControl,
+    CreateSliderControl = CreateSliderControl,
     ApplyBarSettings = ApplyBarSettings,
     UpdateBarDisplay = function()
         UpdateBarDisplay()
@@ -5571,6 +5856,9 @@ Preydator.API = {
     RequestBarRefresh = function()
         ApplyBarSettings()
         UpdateBarDisplay()
+    end,
+    ResetBarPosition = function()
+        barPositionUtil.Reset()
     end,
     NormalizeSoundSettings = function()
         NormalizeSoundSettings()

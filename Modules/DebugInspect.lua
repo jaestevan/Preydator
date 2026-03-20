@@ -214,9 +214,21 @@ local function BuildInspectReport()
 
     local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
     local playerMapName = nil
+    local playerMapType = nil
     if playerMapID and C_Map and C_Map.GetMapInfo then
         local mapInfo = C_Map.GetMapInfo(playerMapID)
         playerMapName = mapInfo and mapInfo.name or nil
+        playerMapType = mapInfo and mapInfo.mapType or nil
+    end
+
+    local inInstance = nil
+    local instanceType = nil
+    if IsInInstance then
+        local okInstance, rawInInstance, rawInstanceType = pcall(IsInInstance)
+        if okInstance then
+            inInstance = rawInInstance == true
+            instanceType = rawInstanceType
+        end
     end
 
     add("Preydator Inspect (module)")
@@ -248,12 +260,30 @@ local function BuildInspectReport()
         local liveHeight = barFrame.GetHeight and barFrame:GetHeight() or "?"
         local liveScale = barFrame.GetScale and barFrame:GetScale() or "?"
         local liveEffectiveScale = barFrame.GetEffectiveScale and barFrame:GetEffectiveScale() or "?"
+        local savedPoint = settings and settings.point or {}
+        local savedX = savedPoint and savedPoint.x
+        local savedY = savedPoint and savedPoint.y
+        local liveX = nil
+        local liveY = nil
+        if barFrame.GetCenter and UIParent and UIParent.GetCenter then
+            local okCenter, frameCenterX, frameCenterY = pcall(barFrame.GetCenter, barFrame)
+            local okParentCenter, parentCenterX, parentCenterY = pcall(UIParent.GetCenter, UIParent)
+            if okCenter and okParentCenter and frameCenterX and frameCenterY and parentCenterX and parentCenterY then
+                liveX = frameCenterX - parentCenterX
+                liveY = frameCenterY - parentCenterY
+            end
+        end
         add("- bar shown=" .. tostring(barFrame.IsShown and barFrame:IsShown() or false)
             .. " | mouse=" .. tostring(barFrame.IsMouseEnabled and barFrame:IsMouseEnabled() or false)
             .. " | width=" .. tostring(liveWidth)
             .. " | height=" .. tostring(liveHeight)
             .. " | scale=" .. tostring(liveScale)
             .. " | effectiveScale=" .. tostring(liveEffectiveScale))
+        add("- bar position savedX=" .. tostring(savedX)
+            .. " | savedY=" .. tostring(savedY)
+            .. " | liveX=" .. tostring(liveX and math.floor((liveX * 100) + 0.5) / 100 or nil)
+            .. " | liveY=" .. tostring(liveY and math.floor((liveY * 100) + 0.5) / 100 or nil)
+            .. " | point=" .. FormatPoint(barFrame))
     else
         add("- bar frame unavailable")
     end

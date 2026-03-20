@@ -158,8 +158,8 @@ local WARBAND_DEFAULT_WIDTH = 420
 local WARBAND_DEFAULT_HEIGHT = 250
 local WARBAND_MIN_WIDTH = 150
 local WARBAND_MAX_WIDTH = 900
-local WARBAND_MIN_HEIGHT = 140
-local WARBAND_MAX_HEIGHT = 800
+local WARBAND_MIN_HEIGHT = 80
+local WARBAND_MAX_HEIGHT = 600
 local WARBAND_DEFAULT_FONT = 12
 local WARBAND_MIN_FONT = 10
 local WARBAND_MAX_FONT = 24
@@ -292,6 +292,123 @@ local function CharacterKey()
     return name .. "-" .. realm
 end
 
+local preyTrackerUtil = {}
+
+function preyTrackerUtil.NormalizeAvailabilityCounts(source)
+    if type(source) ~= "table" then
+        return nil
+    end
+
+    return {
+        normal = math.max(0, tonumber(source.normal) or 0),
+        hard = math.max(0, tonumber(source.hard) or 0),
+        nightmare = math.max(0, tonumber(source.nightmare) or 0),
+        capturedAt = tonumber(source.capturedAt) or (GetTime and GetTime() or 0),
+    }
+end
+
+function preyTrackerUtil.BuildScopeKey(charKey, level)
+    local normalizedLevel = tonumber(level)
+    if type(charKey) ~= "string" or charKey == "" or not normalizedLevel then
+        return nil
+    end
+    return charKey .. "@" .. tostring(math.floor(normalizedLevel + 0.5))
+end
+
+function preyTrackerUtil.CanonicalizeWeeklyKey(rawKey)
+    if type(rawKey) ~= "string" or rawKey == "" then
+        return nil
+    end
+
+    if rawKey:match("^week%-%d%d%d%d%-%d%d$") then
+        return rawKey
+    end
+
+    local suffix = rawKey:match("^(%d%d%d%d%-%d%d)$")
+    if suffix then
+        return "week-" .. suffix
+    end
+
+    return rawKey
+end
+
+function preyTrackerUtil.MergeWeeklyCounts(target, source)
+    target.normal = math.max(0, tonumber(target.normal) or 0) + math.max(0, tonumber(source and source.normal) or 0)
+    target.hard = math.max(0, tonumber(target.hard) or 0) + math.max(0, tonumber(source and source.hard) or 0)
+    target.nightmare = math.max(0, tonumber(target.nightmare) or 0) + math.max(0, tonumber(source and source.nightmare) or 0)
+    return target
+end
+
+function preyTrackerUtil.InferStoredWeeklyResetKey(currencyDB)
+    if type(currencyDB) ~= "table" then
+        return nil
+    end
+
+    local latestKey = nil
+    local function consider(rawKey)
+        local canonical = preyTrackerUtil.CanonicalizeWeeklyKey(rawKey)
+        if canonical and (latestKey == nil or canonical > latestKey) then
+            latestKey = canonical
+        end
+    end
+
+    if type(currencyDB.preyWeeklyProgress) == "table" then
+        for _, weeks in pairs(currencyDB.preyWeeklyProgress) do
+            if type(weeks) == "table" then
+                for rawKey in pairs(weeks) do
+                    consider(rawKey)
+                end
+            end
+        end
+    end
+
+    if type(currencyDB.preySnapshots) == "table" then
+        for _, snap in pairs(currencyDB.preySnapshots) do
+            if type(snap) == "table" then
+                consider(snap.weeklyKey)
+            end
+        end
+    end
+
+    return latestKey
+end
+
+function preyTrackerUtil.GetBestScopedAvailabilityForCharacter(charKey, level)
+    local api = Preydator and Preydator.API
+    local settings = api and type(api.GetSettings) == "function" and api.GetSettings() or nil
+    local huntData = settings and settings.huntScanner
+    local cacheByScope = huntData and huntData.availabilityCacheByScope
+    if type(cacheByScope) ~= "table" then
+        return nil
+    end
+
+    local exactKey = preyTrackerUtil.BuildScopeKey(charKey, level)
+    local exact = exactKey and preyTrackerUtil.NormalizeAvailabilityCounts(cacheByScope[exactKey])
+    if exact then
+        return exact
+    end
+
+    local prefix = type(charKey) == "string" and (charKey .. "@") or nil
+    if not prefix then
+        return nil
+    end
+
+    local bestCounts = nil
+    local bestCapturedAt = -1
+    for scopeKey, counts in pairs(cacheByScope) do
+        if type(scopeKey) == "string" and scopeKey:sub(1, #prefix) == prefix then
+            local normalized = preyTrackerUtil.NormalizeAvailabilityCounts(counts)
+            local capturedAt = normalized and tonumber(normalized.capturedAt) or -1
+            if normalized and capturedAt >= bestCapturedAt then
+                bestCapturedAt = capturedAt
+                bestCounts = normalized
+            end
+        end
+    end
+
+    return bestCounts
+end
+
 local function GetCurrencyQuantity(currencyID)
     if not C_CurrencyInfo or not C_CurrencyInfo.GetCurrencyInfo then
         return 0
@@ -316,7 +433,67 @@ local function EnsureDB()
     c.warbandTotal = c.warbandTotal or {}
     c.preySnapshots = c.preySnapshots or {}
     c.preyWeeklyProgress = c.preyWeeklyProgress or {}
+    c.preyAccountState = c.preyAccountState or {}
+
+    local account = c.preyAccountState
+    if account.nightmareUnlocked == nil then
+        account.nightmareUnlocked = false
+    end
+
+    for _, snap in pairs(c.preySnapshots) do
+        if type(snap) == "table" then
+            local completed = type(snap.weeklyCompleted) == "table" and snap.weeklyCompleted or nil
+            local available = type(snap.preyAvailableCounts) == "table" and snap.preyAvailableCounts or nil
+
+            if (tonumber(completed and completed.nightmare) or 0) > 0 or (tonumber(available and available.nightmare) or 0) > 0 then
+                account.nightmareUnlocked = true
+            end
+        end
+    end
+
+    if type(c.preyWeeklyProgress) == "table" then
+        for charKey, weeks in pairs(c.preyWeeklyProgress) do
+            if type(weeks) == "table" then
+                local merged = {}
+                for rawKey, entry in pairs(weeks) do
+                    local canonicalKey = preyTrackerUtil.CanonicalizeWeeklyKey(rawKey) or rawKey
+                    merged[canonicalKey] = preyTrackerUtil.MergeWeeklyCounts(merged[canonicalKey] or { normal = 0, hard = 0, nightmare = 0 }, entry)
+                end
+                c.preyWeeklyProgress[charKey] = merged
+            end
+        end
+    end
+
+    c.preyAccountState.available = nil
+
+    c.lastWeeklyResetKey = preyTrackerUtil.CanonicalizeWeeklyKey(c.lastWeeklyResetKey)
+        or preyTrackerUtil.InferStoredWeeklyResetKey(c)
+        or ("week-" .. _G.date("%Y-%U"))
+
     db = c
+end
+
+local function GetPreyAccountState()
+    EnsureDB()
+    return db and db.preyAccountState
+end
+
+local function BuildAccountAvailabilityForLevel(level)
+    local account = GetPreyAccountState()
+    local now = GetTime and GetTime() or 0
+    local normalizedLevel = tonumber(level) or 0
+    local nightmareUnlocked = account and account.nightmareUnlocked == true
+
+    local normal = (normalizedLevel >= 78) and 4 or 0
+    local hard = (normalizedLevel >= 90) and 4 or 0
+    local nightmare = (normalizedLevel >= 90 and nightmareUnlocked) and 4 or 0
+
+    return {
+        normal = normal,
+        hard = hard,
+        nightmare = nightmare,
+        capturedAt = now,
+    }
 end
 
 local function GetCurrentPreyState()
@@ -351,7 +528,7 @@ end
 local function GetWeeklyResetKey()
     local weeklyCaps = GetWeeklyCapsModule()
     if weeklyCaps and type(weeklyCaps.GetWeeklyResetKey) == "function" then
-        return weeklyCaps:GetWeeklyResetKey()
+        return preyTrackerUtil.CanonicalizeWeeklyKey(weeklyCaps:GetWeeklyResetKey()) or ("week-" .. _G.date("%Y-%U"))
     end
     return "week-" .. _G.date("%Y-%U")
 end
@@ -386,16 +563,15 @@ local function ApplyWeeklyResetToSnapshots()
         weeklyCaps:ApplyCapsToSnapshots(db.preySnapshots, now)
         return
     end
-    for _, snap in pairs(db.preySnapshots) do
+
+    for charKey, snap in pairs(db.preySnapshots) do
         if type(snap) == "table" then
-            local caps = GetWeeklyCapForSnap(snap)
-            snap.preyAvailableCounts = {
-                normal     = caps.normal,
-                hard       = caps.hard,
-                nightmare  = caps.nightmare,
-                capturedAt = now,
-            }
-            snap.preyAvailabilityKnown = true
+            local level = tonumber(snap.level) or 0
+            snap.preyAvailableCounts = BuildAccountAvailabilityForLevel(level)
+            snap.preyAvailabilityKnown = false
+            snap.preyAvailabilitySource = "derived_reset"
+            snap.weeklyKey = db.lastWeeklyResetKey or GetWeeklyResetKey()
+            snap.weeklyCompleted = GetPreyWeeklyCompleted(charKey, snap.weeklyKey) or snap.weeklyCompleted
         end
     end
 end
@@ -410,7 +586,18 @@ local function CheckAndProcessWeeklyReset()
         weeklyCaps:ProcessReset(db.preySnapshots, GetTime and GetTime() or 0)
         return
     end
-    ApplyWeeklyResetToSnapshots()
+
+    local currentWeekKey = GetWeeklyResetKey()
+    local previousWeekKey = preyTrackerUtil.CanonicalizeWeeklyKey(db.lastWeeklyResetKey)
+        or preyTrackerUtil.InferStoredWeeklyResetKey(db)
+        or currentWeekKey
+
+    if previousWeekKey ~= currentWeekKey then
+        db.lastWeeklyResetKey = currentWeekKey
+        ApplyWeeklyResetToSnapshots()
+    else
+        db.lastWeeklyResetKey = currentWeekKey
+    end
 end
 
 local function NormalizePreyDifficultyKey(diff)
@@ -496,17 +683,22 @@ local function RecordPreyTurnIn(questID)
     local weeklyCompleted = GetPreyWeeklyCompleted(key, weekKey)
     weeklyCompleted[diffKey] = (tonumber(weeklyCompleted[diffKey]) or 0) + 1
     if db and db.preySnapshots and type(db.preySnapshots[key]) == "table" then
-        db.preySnapshots[key].weeklyCompleted = weeklyCompleted
+        local snap = db.preySnapshots[key]
+        snap.weeklyCompleted = weeklyCompleted
+        snap.weeklyKey = weekKey
+        if type(snap.preyAvailableCounts) == "table" then
+            snap.preyAvailableCounts[diffKey] = math.max(0, (tonumber(snap.preyAvailableCounts[diffKey]) or 0) - 1)
+            snap.preyAvailableCounts.capturedAt = GetTime and GetTime() or 0
+        end
     end
 end
 
 local function BuildPreyProgressTriplet(snap, mode)
     local level = tonumber(snap and snap.level) or 0
-    local weeklyCaps = GetWeeklyCapsModule()
-    local flags = (weeklyCaps and type(weeklyCaps.GetAccountFlags) == "function" and weeklyCaps:GetAccountFlags()) or {}
-    local maxNormal = 4
-    local maxHard = (level >= 90 and (flags.hardUnlocked == true or flags.nightmareUnlocked == true)) and 4 or 0
-    local maxNightmare = (flags.nightmareUnlocked == true) and 4 or 0
+    local account = GetPreyAccountState()
+    local maxNormal = (level >= 78) and 4 or 0
+    local maxHard = (level >= 90) and 4 or 0
+    local maxNightmare = (level >= 90 and account and account.nightmareUnlocked == true) and 4 or 0
 
     local completed = type(snap and snap.weeklyCompleted) == "table" and snap.weeklyCompleted or {}
     local normalDone = math.max(0, tonumber(completed.normal) or 0)
@@ -526,6 +718,11 @@ local function BuildPreyProgressTriplet(snap, mode)
 
     local available = type(snap and snap.preyAvailableCounts) == "table" and snap.preyAvailableCounts or nil
 
+    if (tonumber(nightmareDone) or 0) > 0 and account and account.nightmareUnlocked ~= true then
+        account.nightmareUnlocked = true
+        maxNightmare = (level >= 90) and 4 or 0
+    end
+
     if not availabilityKnown and not available and normalDone == 0 and hardDone == 0 and nightmareDone == 0 then
         return "?/?/?"
     end
@@ -535,14 +732,16 @@ local function BuildPreyProgressTriplet(snap, mode)
         local availableHard = math.max(0, tonumber(available.hard) or 0)
         local availableNightmare = math.max(0, tonumber(available.nightmare) or 0)
 
-        if availableHard > 0 and maxHard == 0 then
-            maxHard = 4
-        end
-        if availableNightmare > 0 and maxNightmare == 0 then
-            maxNightmare = 4
-        end
-        if maxNightmare > 0 and maxHard == 0 then
-            maxHard = 4
+        if level >= 90 then
+            if availableHard > 0 and maxHard == 0 then
+                maxHard = 4
+            end
+            if availableNightmare > 0 and maxNightmare == 0 then
+                maxNightmare = 4
+            end
+            if maxNightmare > 0 and maxHard == 0 then
+                maxHard = 4
+            end
         end
 
         maxNormal = math.max(maxNormal, availableNormal + normalDone)
@@ -600,13 +799,21 @@ local function SnapshotCurrentPreyCharacter()
 
     local key = CharacterKey()
     local availableCounts, availabilityKnown = GetPreyAvailabilityFromHuntScanner()
+    local level = _G.UnitLevel and (tonumber(_G.UnitLevel("player")) or 0) or 0
+
+    local account = GetPreyAccountState()
+    if account then
+        local diffKey = NormalizePreyDifficultyKey(state.preyTargetDifficulty)
+        if diffKey == "nightmare" or ((type(availableCounts) == "table") and (tonumber(availableCounts.nightmare) or 0) > 0) then
+            account.nightmareUnlocked = true
+        end
+    end
 
     local preyData = GetPreyDataModule()
     if preyData and type(preyData.CaptureSnapshot) == "function" then
         preyData:CaptureSnapshot(key, state, availableCounts, availabilityKnown)
     else
         -- Fallback: PreyData module unavailable, write snapshot directly.
-        local level = _G.UnitLevel and (tonumber(_G.UnitLevel("player")) or 0) or 0
         local zoneName = GetZoneText and (GetZoneText() or "") or ""
         local classFile = nil
         if UnitClass then
@@ -616,10 +823,14 @@ local function SnapshotCurrentPreyCharacter()
         local weekKey = GetWeeklyResetKey()
         local weeklyCompleted = GetPreyWeeklyCompleted(key, weekKey)
         local existingSnap = db and db.preySnapshots and db.preySnapshots[key]
-        local finalAvailability = (availableCounts and type(availableCounts) == "table") and availableCounts
-            or (type(existingSnap) == "table" and existingSnap.preyAvailableCounts) or nil
-        local finalAvailabilityKnown = availabilityKnown == true
-            or (type(existingSnap) == "table" and existingSnap.preyAvailabilityKnown == true)
+        local derivedAvailability = BuildAccountAvailabilityForLevel(level)
+        local scopedAvailability = preyTrackerUtil.GetBestScopedAvailabilityForCharacter(key, level)
+        local finalAvailability = (availabilityKnown == true and type(availableCounts) == "table") and availableCounts
+            or scopedAvailability
+            or (type(existingSnap) == "table" and existingSnap.preyAvailableCounts)
+            or derivedAvailability
+            or nil
+        local finalAvailabilityKnown = availabilityKnown == true or scopedAvailability ~= nil
         if db and db.preySnapshots then
             db.preySnapshots[key] = {
                 stage                = tonumber(state.stage) or 0,
@@ -629,9 +840,13 @@ local function SnapshotCurrentPreyCharacter()
                 inPreyZone           = state.inPreyZone == true,
                 preyTargetName       = state.preyTargetName,
                 preyTargetDifficulty = state.preyTargetDifficulty,
+                weeklyKey            = weekKey,
                 weeklyCompleted      = weeklyCompleted or { normal = 0, hard = 0, nightmare = 0 },
-                preyAvailableCounts  = finalAvailability,
+                preyAvailableCounts  = preyTrackerUtil.NormalizeAvailabilityCounts(finalAvailability),
                 preyAvailabilityKnown = finalAvailabilityKnown,
+                preyAvailabilitySource = availabilityKnown == true and "live_huntscanner"
+                    or (scopedAvailability ~= nil and "scoped_cache")
+                    or "derived_default",
                 capturedAt           = GetTime and GetTime() or 0,
                 classFile            = classFile,
             }
@@ -1403,7 +1618,7 @@ local function EnsureCurrencyWhatsNewFrame()
     local frame = CreateFrame("Frame", "PreydatorCurrencyWhatsNewFrame", UIParent, "BackdropTemplate")
     frame:SetSize(520, 320)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
-    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:EnableMouse(true)
     frame:SetMovable(true)
@@ -1573,6 +1788,102 @@ function CurrencyTrackerModule:SetWarbandCharacterShown(charKey, shown)
     settings.currencyWarbandCharacterVisibility = settings.currencyWarbandCharacterVisibility or {}
     settings.currencyWarbandCharacterVisibility[charKey] = shown and true or false
     CurrencyTrackerModule:RefreshCurrencyPage()
+end
+
+function CurrencyTrackerModule:SetAllWarbandCharactersShown(shown)
+    EnsureTrackerSettings()
+    EnsureDB()
+
+    local settings = GetSettings()
+    if not settings then
+        return
+    end
+
+    settings.currencyWarbandCharacterVisibility = settings.currencyWarbandCharacterVisibility or {}
+
+    local rows = GetKnownWarbandCharacters()
+    for _, entry in ipairs(rows) do
+        settings.currencyWarbandCharacterVisibility[entry.charKey] = shown and true or false
+    end
+
+    self:RefreshCurrencyPage()
+end
+
+local function RemoveWarbandCharacterData(charKey)
+    if type(charKey) ~= "string" or charKey == "" then
+        return false
+    end
+
+    local removed = false
+    if db and type(db.snapshots) == "table" and db.snapshots[charKey] ~= nil then
+        db.snapshots[charKey] = nil
+        removed = true
+    end
+    if db and type(db.preySnapshots) == "table" and db.preySnapshots[charKey] ~= nil then
+        db.preySnapshots[charKey] = nil
+        removed = true
+    end
+    if db and type(db.preyWeeklyProgress) == "table" and db.preyWeeklyProgress[charKey] ~= nil then
+        db.preyWeeklyProgress[charKey] = nil
+        removed = true
+    end
+
+    local settings = GetSettings()
+    if settings and type(settings.currencyWarbandCharacterVisibility) == "table" then
+        settings.currencyWarbandCharacterVisibility[charKey] = nil
+    end
+
+    if removed then
+        RebuildWarbandTotals()
+    end
+
+    return removed
+end
+
+function CurrencyTrackerModule:RemoveWarbandCharacter(charKey)
+    EnsureTrackerSettings()
+    EnsureDB()
+
+    if charKey == CharacterKey() then
+        return false
+    end
+
+    local removed = RemoveWarbandCharacterData(charKey)
+    if removed then
+        self:RefreshCurrencyPage()
+    end
+    return removed
+end
+
+function CurrencyTrackerModule:PurgeHiddenWarbandCharacters()
+    EnsureTrackerSettings()
+    EnsureDB()
+
+    local settings = GetSettings()
+    if not settings then
+        return 0
+    end
+
+    local visibility = settings.currencyWarbandCharacterVisibility
+    if type(visibility) ~= "table" then
+        return 0
+    end
+
+    local currentKey = CharacterKey()
+    local removedCount = 0
+    for charKey, isShown in pairs(visibility) do
+        if isShown == false and charKey ~= currentKey then
+            if RemoveWarbandCharacterData(charKey) then
+                removedCount = removedCount + 1
+            end
+        end
+    end
+
+    if removedCount > 0 then
+        self:RefreshCurrencyPage()
+    end
+
+    return removedCount
 end
 
 local function HandleMinimapClick(mouseButton)
@@ -1806,6 +2117,8 @@ EnsureCurrencyWindow = function()
     local windowWidth, windowHeight, _, windowScale = GetCurrencyWindowConfig()
     frame:SetSize(windowWidth, windowHeight)
     frame:SetScale(windowScale)
+    frame:SetFrameStrata("MEDIUM")
+    frame:SetFrameLevel(10)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1814,8 +2127,8 @@ EnsureCurrencyWindow = function()
         edgeSize = 14,
         insets = { left = 4, right = 4, top = 4, bottom = 4 },
     })
-    frame:SetBackdropColor(0.03, 0.03, 0.04, 0.95)
-    frame:SetBackdropBorderColor(COLOR_BORDER[1], COLOR_BORDER[2], COLOR_BORDER[3], COLOR_BORDER[4])
+    frame:SetBackdropColor(0.03, 0.03, 0.04, 0.98)
+    frame:SetBackdropBorderColor(COLOR_BORDER[1], COLOR_BORDER[2], COLOR_BORDER[3], 1)
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -1830,7 +2143,7 @@ EnsureCurrencyWindow = function()
 
     local bg = frame:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    bg:SetColorTexture(0.02, 0.02, 0.03, 0.88)
+    bg:SetColorTexture(0.02, 0.02, 0.03, 0.94)
 
     local topBar = frame:CreateTexture(nil, "BORDER")
     topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
@@ -1920,6 +2233,8 @@ EnsureWarbandWindow = function()
     local windowWidth, windowHeight, _, windowScale = GetWarbandWindowConfig()
     frame:SetSize(windowWidth, windowHeight)
     frame:SetScale(windowScale)
+    frame:SetFrameStrata("MEDIUM")
+    frame:SetFrameLevel(11)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1928,8 +2243,8 @@ EnsureWarbandWindow = function()
         edgeSize = 14,
         insets = { left = 4, right = 4, top = 4, bottom = 4 },
     })
-    frame:SetBackdropColor(0.03, 0.03, 0.04, 0.95)
-    frame:SetBackdropBorderColor(COLOR_BORDER[1], COLOR_BORDER[2], COLOR_BORDER[3], COLOR_BORDER[4])
+    frame:SetBackdropColor(0.03, 0.03, 0.04, 0.98)
+    frame:SetBackdropBorderColor(0.44, 0.56, 0.80, 1)
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -1944,13 +2259,13 @@ EnsureWarbandWindow = function()
 
     local bg = frame:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    bg:SetColorTexture(0.02, 0.02, 0.03, 0.88)
+    bg:SetColorTexture(0.02, 0.03, 0.05, 0.94)
 
     local topBar = frame:CreateTexture(nil, "BORDER")
     topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
     topBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
     topBar:SetHeight(26)
-    topBar:SetColorTexture(0.20, 0.14, 0.06, 0.95)
+    topBar:SetColorTexture(0.16, 0.20, 0.30, 0.97)
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("LEFT", frame, "TOPLEFT", 10, -13)
@@ -2102,7 +2417,7 @@ local function EnsureWarbandRows(minCount)
     end
 end
 
-local function ApplyWarbandColumnLayout(showRealm)
+local function ApplyWarbandColumnLayout(showRealm, displayRowCount)
     if not warbandWindow then
         return
     end
@@ -2124,21 +2439,7 @@ local function ApplyWarbandColumnLayout(showRealm)
         trackedCurrencyIDs[1] = 3392
     end
 
-    local allRows = GetWarbandRows()
-    local rowCount = #allRows
-    if showRealm then
-        local realms = {}
-        for _, rowData in ipairs(allRows) do
-            local _, realmName = rowData.charKey:match("^(.-)%-(.+)$")
-            realmName = realmName or "Unknown"
-            realms[realmName] = true
-        end
-        local realmCount = 0
-        for _ in pairs(realms) do
-            realmCount = realmCount + 1
-        end
-        rowCount = rowCount + realmCount
-    end
+    local rowCount = math.max(1, tonumber(displayRowCount) or 0)
 
     local realmWidth = showRealm and 96 or 0
     local charWidth = showRealm and 108 or 124
@@ -2263,7 +2564,7 @@ local function ApplyWarbandColumnLayout(showRealm)
         end
     end
 
-    local visibleRows = math.max(8, math.floor((finalWindowHeight - 86) / rowHeight))
+    local visibleRows = math.max(1, math.floor((finalWindowHeight - 86) / rowHeight))
     EnsureWarbandRows(visibleRows)
 
     for index, rowData in ipairs(warbandWindowRows) do
@@ -2456,8 +2757,6 @@ local function RefreshWarbandWindowDisplay()
     local theme = GetWarbandThemePreset()
     local useClassColors = not settings or settings.themeUseClassColors ~= false
     local showRealm = settings and settings.currencyShowRealmInWarband == true
-    ApplyWarbandColumnLayout(showRealm)
-
     if warbandWindow.PreydatorBg then
         warbandWindow.PreydatorBg:SetColorTexture(theme.section[1], theme.section[2], theme.section[3], 0.88)
     end
@@ -2523,8 +2822,8 @@ local function RefreshWarbandWindowDisplay()
             leftValue = left.charKey
             rightValue = right.charKey
         elseif key == "prey" then
-            local leftSnap = settings and settings.preySnapshots and settings.preySnapshots[left.charKey] or nil
-            local rightSnap = settings and settings.preySnapshots and settings.preySnapshots[right.charKey] or nil
+            local leftSnap = db and db.preySnapshots and db.preySnapshots[left.charKey] or nil
+            local rightSnap = db and db.preySnapshots and db.preySnapshots[right.charKey] or nil
             leftValue = BuildPreyProgressTriplet(leftSnap, (settings and settings.currencyWarbandPreyMode) or "available")
             rightValue = BuildPreyProgressTriplet(rightSnap, (settings and settings.currencyWarbandPreyMode) or "available")
         else
@@ -2633,6 +2932,8 @@ local function RefreshWarbandWindowDisplay()
             }
         end
     end
+
+    ApplyWarbandColumnLayout(showRealm, #displayRows)
 
     for index, rowData in ipairs(warbandWindowRows) do
         local data = displayRows[index]

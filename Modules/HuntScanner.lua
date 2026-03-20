@@ -77,6 +77,9 @@ local panelRowHeight = 52
 local panelScrollViewport
 local panelScrollContent
 local panelScrollBar
+local DIFFICULTY_NORMAL = "normal"
+local DIFFICULTY_HARD = "hard"
+local DIFFICULTY_NIGHTMARE = "nightmare"
 local availabilityCache = {
     normal = 0,
     hard = 0,
@@ -95,6 +98,7 @@ local HandleInteractionSnapshot
 local QueueInteractionSnapshotPasses
 local HidePanel
 local GetSettings
+local IsInRestrictedInstance
 local huntEventFrame
 local noisyEventsRegistered = false
 local IsMissionFrameVisible
@@ -124,6 +128,11 @@ local function SetNoisyEventSubscriptions(enabled)
 end
 
 local function SyncNoisyEventSubscriptions()
+    if IsInRestrictedInstance() and not IsOptionsPreviewVisible() then
+        SetNoisyEventSubscriptions(false)
+        return
+    end
+
     local enabled = IsMissionFrameVisible()
         or huntInteractionActive
         or IsOptionsPreviewVisible()
@@ -175,11 +184,14 @@ local function GetGossipOptionsSafe()
     return {}
 end
 
-local function IsInRestrictedInstance()
+IsInRestrictedInstance = function()
     if type(IsInInstance) ~= "function" then
         return false
     end
-    local inInstance, instanceType = IsInInstance()
+    local ok, inInstance, instanceType = pcall(IsInInstance)
+    if not ok then
+        return false
+    end
     if not inInstance then
         return false
     end
@@ -396,6 +408,10 @@ local function EnsureSettings()
         settings.huntScannerSortBy = "zone"
     end
 
+    if settings.huntScannerSortDir ~= "asc" and settings.huntScannerSortDir ~= "desc" then
+        settings.huntScannerSortDir = "asc"
+    end
+
     if settings.huntScannerAnchorAlign ~= "top" and settings.huntScannerAnchorAlign ~= "middle" and settings.huntScannerAnchorAlign ~= "bottom" then
         settings.huntScannerAnchorAlign = "top"
     end
@@ -496,6 +512,36 @@ local function LoadAvailabilityCache()
     availabilityTouched = storage.availabilityTouchedByScope[scopeKey] == true
 end
 
+local function GetDifficultyDisplayName(canonicalDifficulty)
+    if canonicalDifficulty == DIFFICULTY_HARD then
+        return L["Hard"]
+    elseif canonicalDifficulty == DIFFICULTY_NIGHTMARE then
+        return L["Nightmare"]
+    end
+
+    return L["Normal"]
+end
+
+local function NormalizeDifficultyKey(value)
+    if type(value) ~= "string" or value == "" then
+        return DIFFICULTY_NORMAL
+    end
+
+    if value == DIFFICULTY_NORMAL or value == DIFFICULTY_HARD or value == DIFFICULTY_NIGHTMARE then
+        return value
+    end
+
+    if value == L["Nightmare"] or value == "Nightmare" then
+        return DIFFICULTY_NIGHTMARE
+    end
+
+    if value == L["Hard"] or value == "Hard" then
+        return DIFFICULTY_HARD
+    end
+
+    return DIFFICULTY_NORMAL
+end
+
 local function MarkAvailabilityTouched()
     if availabilityTouched then
         return
@@ -518,13 +564,13 @@ local function UpdateAvailabilityCacheFromHunts(hunts)
         if questID and questID > 0 then
             local isOnQuest = C_QuestLog and type(C_QuestLog.IsOnQuest) == "function" and C_QuestLog.IsOnQuest(questID) == true
             if not isOnQuest then
-                local difficulty = tostring(hunt and hunt.difficulty or "")
-                if difficulty == tostring(L["Nightmare"]) then
-                    counts.nightmare = counts.nightmare + 1
-                elseif difficulty == tostring(L["Hard"]) then
-                    counts.hard = counts.hard + 1
+                local difficulty = NormalizeDifficultyKey(hunt and hunt.difficulty)
+                if difficulty == DIFFICULTY_NIGHTMARE then
+                    counts[DIFFICULTY_NIGHTMARE] = counts[DIFFICULTY_NIGHTMARE] + 1
+                elseif difficulty == DIFFICULTY_HARD then
+                    counts[DIFFICULTY_HARD] = counts[DIFFICULTY_HARD] + 1
                 else
-                    counts.normal = counts.normal + 1
+                    counts[DIFFICULTY_NORMAL] = counts[DIFFICULTY_NORMAL] + 1
                 end
             end
         end
@@ -646,7 +692,7 @@ local function RememberQuestDifficulty(questID, difficulty)
     end
 
     local storage = GetRewardStorage()
-    storage.questDifficultyByID[tostring(id)] = difficulty
+    storage.questDifficultyByID[tostring(id)] = NormalizeDifficultyKey(difficulty)
 end
 
 local function GetRememberedQuestDifficulty(questID)
@@ -657,16 +703,76 @@ local function GetRememberedQuestDifficulty(questID)
 
     local hunt = huntByQuestID[id]
     if type(hunt) == "table" and type(hunt.difficulty) == "string" and hunt.difficulty ~= "" then
-        return hunt.difficulty
+        return NormalizeDifficultyKey(hunt.difficulty)
     end
 
     local storage = GetRewardStorage()
     local stored = storage.questDifficultyByID and storage.questDifficultyByID[tostring(id)]
     if type(stored) == "string" and stored ~= "" then
-        return stored
+        return NormalizeDifficultyKey(stored)
     end
 
     return nil
+end
+
+local function MigrateDifficultyKeysFromLocalizedToCanonical()
+    -- Migrate old persisted data from localized keys (L["Normal"], L["Hard"], L["Nightmare"])
+    -- to canonical keys ("normal", "hard", "nightmare")
+    local storage = GetRewardStorage()
+    if not storage or not storage.difficultyRewardCache then
+        return
+    end
+
+    local oldCache = storage.difficultyRewardCache
+    local newCache = {}
+    local needsMigration = false
+
+    for key, rewards in pairs(oldCache) do
+        -- Detect if this is a localized key (L[...] returns the key name itself in non-enUS locales)
+        -- or English strings. Update to canonical form.
+        local canonicalKey = key
+        if key == L["Normal"] or key == "Normal" then
+            canonicalKey = DIFFICULTY_NORMAL
+            needsMigration = needsMigration or (key ~= DIFFICULTY_NORMAL)
+        elseif key == L["Hard"] or key == "Hard" then
+            canonicalKey = DIFFICULTY_HARD
+            needsMigration = needsMigration or (key ~= DIFFICULTY_HARD)
+        elseif key == L["Nightmare"] or key == "Nightmare" then
+            canonicalKey = DIFFICULTY_NIGHTMARE
+            needsMigration = needsMigration or (key ~= DIFFICULTY_NIGHTMARE)
+        end
+
+        if type(rewards) == "table" then
+            local existingRewards = newCache[canonicalKey]
+            -- Keep the version with better rewards (higher score)
+            if not existingRewards then
+                newCache[canonicalKey] = CopyStringList(rewards)
+            else
+                local newScore = 0
+                local existingScore = 0
+                for _, r in ipairs(rewards) do
+                    if tostring(r or "") ~= "" then newScore = newScore + 1 end
+                end
+                for _, r in ipairs(existingRewards) do
+                    if tostring(r or "") ~= "" then existingScore = existingScore + 1 end
+                end
+                if newScore > existingScore then
+                    newCache[canonicalKey] = CopyStringList(rewards)
+                end
+            end
+        end
+    end
+
+    if needsMigration then
+        storage.difficultyRewardCache = newCache
+    end
+
+    -- Migrate questDifficultyByID: values from localized to canonical
+    if storage.questDifficultyByID then
+        for questIDStr, difficulty in pairs(storage.questDifficultyByID) do
+            storage.questDifficultyByID[questIDStr] = NormalizeDifficultyKey(difficulty)
+        end
+    end
 end
 
 local function LoadRewardCaches()
@@ -680,6 +786,9 @@ local function LoadRewardCaches()
         storage.rewardCache = {}
         storage.difficultyRewardCache = {}
     end
+
+    -- Migrate old localized keys to canonical format
+    MigrateDifficultyKeysFromLocalizedToCanonical()
 
     if wipe then
         wipe(rewardCache)
@@ -1029,18 +1138,18 @@ end
 
 local function ParseDifficulty(description)
     if type(description) ~= "string" then
-        return L["Normal"]
+        return DIFFICULTY_NORMAL
     end
 
     if SafeFindLiteral(description, "Nightmare") then
-        return L["Nightmare"]
+        return DIFFICULTY_NIGHTMARE
     end
 
     if SafeFindLiteral(description, "Hard") then
-        return L["Hard"]
+        return DIFFICULTY_HARD
     end
 
-    return L["Normal"]
+    return DIFFICULTY_NORMAL
 end
 
 local function InferZoneFromCoords(x, y)
@@ -1534,7 +1643,7 @@ local function WarmRewardCacheFromPins()
     local representativeByDifficulty = {}
     for _, hunt in ipairs(liveHunts) do
         if type(hunt.questID) == "number" and rewardCache[hunt.questID] == nil then
-            local difficulty = hunt.difficulty or L["Normal"]
+            local difficulty = hunt.difficulty or DIFFICULTY_NORMAL
             if representativeByDifficulty[difficulty] == nil then
                 representativeByDifficulty[difficulty] = {
                     questID = hunt.questID,
@@ -1545,7 +1654,7 @@ local function WarmRewardCacheFromPins()
         end
     end
 
-    for _, difficulty in ipairs({ L["Normal"], L["Hard"], L["Nightmare"] }) do
+    for _, difficulty in ipairs({ DIFFICULTY_NORMAL, DIFFICULTY_HARD, DIFFICULTY_NIGHTMARE }) do
         if representativeByDifficulty[difficulty] then
             queue[#queue + 1] = representativeByDifficulty[difficulty]
             representativeByDifficulty[difficulty] = nil
@@ -1716,7 +1825,7 @@ local function CaptureSnapshot(options, npcID)
     local mapHuntCount = #liveHunts
     local mapDifficultyCounts = {}
     for _, hunt in ipairs(liveHunts) do
-        local difficulty = hunt and hunt.difficulty or L["Normal"]
+        local difficulty = hunt and hunt.difficulty or DIFFICULTY_NORMAL
         mapDifficultyCounts[difficulty] = (mapDifficultyCounts[difficulty] or 0) + 1
     end
 
@@ -1818,9 +1927,9 @@ local function BuildDebugSnapshotLines(snapshot)
         .. " mapVisible=" .. SafeToString(mapState.missionVisible)
 
     if type(mapState.difficultyCounts) == "table" then
-        lines[#lines + 1] = "Preydator HuntDebug: mapDiffs normal=" .. SafeToString(mapState.difficultyCounts[L["Normal"]] or 0)
-            .. " hard=" .. SafeToString(mapState.difficultyCounts[L["Hard"]] or 0)
-            .. " nightmare=" .. SafeToString(mapState.difficultyCounts[L["Nightmare"]] or 0)
+        lines[#lines + 1] = "Preydator HuntDebug: mapDiffs normal=" .. SafeToString(mapState.difficultyCounts[DIFFICULTY_NORMAL] or 0)
+            .. " hard=" .. SafeToString(mapState.difficultyCounts[DIFFICULTY_HARD] or 0)
+            .. " nightmare=" .. SafeToString(mapState.difficultyCounts[DIFFICULTY_NIGHTMARE] or 0)
     end
 
     for index, hunt in ipairs(mapState.preview or {}) do
@@ -1925,7 +2034,7 @@ local function EnsurePanel()
     local panelWidth, panelHeight, _, panelScale = GetPanelConfig()
     frame:SetSize(panelWidth, panelHeight)
     frame:SetScale(panelScale)
-    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -2192,14 +2301,15 @@ local function ApplyPanelAnchor(frame)
 end
 
 local function GetDifficultyBadge(difficulty)
-    local value = tostring(difficulty or "")
-    if value == tostring(L["Nightmare"]) then
+    local canonicalDifficulty = NormalizeDifficultyKey(difficulty)
+
+    if canonicalDifficulty == DIFFICULTY_NIGHTMARE then
         return "|cffff5a5a[Ni]|r"
     end
-    if value == tostring(L["Hard"]) then
+    if canonicalDifficulty == DIFFICULTY_HARD then
         return "|cffffaa3d[H]|r"
     end
-    if value == tostring(L["Normal"]) then
+    if canonicalDifficulty == DIFFICULTY_NORMAL then
         return "|cff6cff8f[N]|r"
     end
     return "|cff9aa3ad[?]|r"
@@ -2210,7 +2320,7 @@ local function BuildQuestRows(mapHunts)
 
     for _, hunt in ipairs(mapHunts or {}) do
         local title = hunt.title or ((hunt.questID and ("Quest " .. tostring(hunt.questID))) or L["Unknown"])
-        local difficulty = hunt.difficulty or L["Normal"]
+        local difficulty = NormalizeDifficultyKey(hunt.difficulty)
         local badge = GetDifficultyBadge(difficulty)
 
         rows[#rows + 1] = {
@@ -2218,7 +2328,8 @@ local function BuildQuestRows(mapHunts)
             title = badge .. " " .. title,
             reward = BuildRewardSummary(hunt.questID),
             canAccept = not (C_QuestLog and type(C_QuestLog.IsOnQuest) == "function" and C_QuestLog.IsOnQuest(hunt.questID) == true),
-            difficulty = difficulty,
+            difficultyKey = difficulty,
+            difficulty = GetDifficultyDisplayName(difficulty),
             zone = hunt.zone or L["Unknown"],
             baseTitle = title,
         }
@@ -2228,37 +2339,75 @@ local function BuildQuestRows(mapHunts)
         local settings = GetSettings() or {}
         local sortBy = settings.huntScannerSortBy or "zone"
         local groupBy = settings.huntScannerGroupBy or "difficulty"
+        local sortDir = settings.huntScannerSortDir or "asc"
+        local descending = sortDir == "desc"
 
-        local function SortValue(row)
-            if sortBy == "zone" then
-                return tostring(row.zone or "")
+        local function GetDifficultyRank(value)
+            local key = NormalizeDifficultyKey(value)
+            if key == DIFFICULTY_NORMAL then
+                return 1
             end
-            if sortBy == "title" then
-                return tostring(row.baseTitle or row.title or "")
+            if key == DIFFICULTY_HARD then
+                return 2
             end
-            return tostring(row.difficulty or "")
+            if key == DIFFICULTY_NIGHTMARE then
+                return 3
+            end
+            return 99
         end
 
         local function SortRows(rowList, keyOverride)
             local effectiveSortBy = keyOverride or sortBy
             table.sort(rowList, function(left, right)
-                local l
-                local r
+                local cmp = 0
                 if effectiveSortBy == "zone" then
-                    l = tostring(left.zone or "")
-                    r = tostring(right.zone or "")
+                    local l = tostring(left.zone or "")
+                    local r = tostring(right.zone or "")
+                    if l == r then
+                        local lt = tostring(left.baseTitle or left.title or "")
+                        local rt = tostring(right.baseTitle or right.title or "")
+                        if lt < rt then
+                            cmp = -1
+                        elseif lt > rt then
+                            cmp = 1
+                        end
+                    else
+                        cmp = (l < r) and -1 or 1
+                    end
                 elseif effectiveSortBy == "title" then
-                    l = tostring(left.baseTitle or left.title or "")
-                    r = tostring(right.baseTitle or right.title or "")
+                    local l = tostring(left.baseTitle or left.title or "")
+                    local r = tostring(right.baseTitle or right.title or "")
+                    if l == r then
+                        local lz = tostring(left.zone or "")
+                        local rz = tostring(right.zone or "")
+                        if lz < rz then
+                            cmp = -1
+                        elseif lz > rz then
+                            cmp = 1
+                        end
+                    else
+                        cmp = (l < r) and -1 or 1
+                    end
                 else
-                    l = tostring(left.difficulty or "")
-                    r = tostring(right.difficulty or "")
+                    local lRank = GetDifficultyRank(left.difficultyKey or left.difficulty)
+                    local rRank = GetDifficultyRank(right.difficultyKey or right.difficulty)
+                    if lRank == rRank then
+                        local lt = tostring(left.baseTitle or left.title or "")
+                        local rt = tostring(right.baseTitle or right.title or "")
+                        if lt < rt then
+                            cmp = -1
+                        elseif lt > rt then
+                            cmp = 1
+                        end
+                    else
+                        cmp = (lRank < rRank) and -1 or 1
+                    end
                 end
 
-                if l == r then
-                    return tostring(left.baseTitle or left.title or "") < tostring(right.baseTitle or right.title or "")
+                if descending then
+                    return cmp > 0
                 end
-                return l < r
+                return cmp < 0
             end)
         end
 
@@ -2283,6 +2432,14 @@ local function BuildQuestRows(mapHunts)
         end
 
         table.sort(bucketOrder, function(left, right)
+            if groupBy == "difficulty" then
+                local lRank = GetDifficultyRank(left)
+                local rRank = GetDifficultyRank(right)
+                if lRank == rRank then
+                    return tostring(left) < tostring(right)
+                end
+                return lRank > rRank
+            end
             return tostring(left) < tostring(right)
         end)
 
@@ -2415,7 +2572,8 @@ local function RenderPanel(questRows)
     if frame.PreydatorSubtitle then
         local groupLabel = settings.huntScannerGroupBy or "difficulty"
         local sortLabel = settings.huntScannerSortBy or "zone"
-        frame.PreydatorSubtitle:SetText("Group: " .. tostring(groupLabel) .. " | Sort: " .. tostring(sortLabel))
+        local sortDirLabel = settings.huntScannerSortDir or "asc"
+        frame.PreydatorSubtitle:SetText("Group: " .. tostring(groupLabel) .. " | Sort: " .. tostring(sortLabel) .. " (" .. tostring(sortDirLabel) .. ")")
     end
 
     if not questRows or #questRows == 0 then
@@ -2487,7 +2645,7 @@ local function RenderPanel(questRows)
     QueueReflowRows()
 end
 
-HidePanel = function()
+HidePanel = function(cancelQueuedPasses)
     if panelFrame then
         panelFrame:Hide()
     end
@@ -2498,7 +2656,9 @@ HidePanel = function()
         panelScrollViewport:SetVerticalScroll(0)
     end
     huntInteractionActive = false
-    snapshotSequence = snapshotSequence + 1
+    if cancelQueuedPasses ~= false then
+        snapshotSequence = snapshotSequence + 1
+    end
     lastOpenQuestID = nil
     lastOpenAt = 0
     SyncNoisyEventSubscriptions()
@@ -2522,7 +2682,7 @@ HandleInteractionSnapshot = function()
 
         local settings = GetSettings()
         if not settings or settings.huntScannerEnabled == false then
-            HidePanel()
+            HidePanel(false)
             return
         end
 
@@ -2547,12 +2707,12 @@ HandleInteractionSnapshot = function()
                 RenderPanel(BuildPreviewRows())
                 return
             end
-            HidePanel()
+            HidePanel(false)
             return
         end
 
         if not IsOptionsPreviewVisible() and not HasVisibleHuntAnchor() then
-            HidePanel()
+            HidePanel(false)
             return
         end
 
@@ -2853,10 +3013,10 @@ function HuntScannerModule:GetAvailabilityCounts()
         if questID and questID > 0 then
             local isOnQuest = C_QuestLog and type(C_QuestLog.IsOnQuest) == "function" and C_QuestLog.IsOnQuest(questID) == true
             if not isOnQuest then
-                local difficulty = tostring(hunt and hunt.difficulty or "")
-                if difficulty == tostring(L["Nightmare"]) then
+                local difficulty = NormalizeDifficultyKey(hunt and hunt.difficulty)
+                if difficulty == DIFFICULTY_NIGHTMARE then
                     counts.nightmare = counts.nightmare + 1
-                elseif difficulty == tostring(L["Hard"]) then
+                elseif difficulty == DIFFICULTY_HARD then
                     counts.hard = counts.hard + 1
                 else
                     counts.normal = counts.normal + 1
@@ -2936,7 +3096,7 @@ function HuntScannerModule:GetQuestMetadata(questID)
     return {
         questID = id,
         title = title,
-        difficulty = difficulty,
+        difficulty = NormalizeDifficultyKey(difficulty),
         zoneName = zoneName,
         zoneMapID = zoneMapID,
         sourceType = sourceType,
@@ -2965,8 +3125,9 @@ huntEventFrame:RegisterEvent("QUEST_FINISHED")
 
 huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     local noisyEvent = (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS")
+    local isRestrictedInstance = IsInRestrictedInstance()
     local hasActiveQuest = HasActivePreyQuest()
-    local hasHuntContext = IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or hasActiveQuest
+    local hasHuntContext = (not isRestrictedInstance) and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or hasActiveQuest)
 
     if (not noisyEvent) or hasHuntContext then
         RecordEvent(event, ...)
@@ -2985,14 +3146,36 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         ProcessRewardCacheLifecycle()
     end
 
+    if isRestrictedInstance and event ~= "PLAYER_LOGIN" then
+        if huntInteractionActive then
+            huntInteractionActive = false
+            SyncNoisyEventSubscriptions()
+        end
+
+        if event == "GOSSIP_SHOW"
+            or event == "GOSSIP_CLOSED"
+            or event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW"
+            or event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE"
+            or event == "QUEST_DETAIL"
+            or event == "QUEST_PROGRESS"
+            or event == "QUEST_COMPLETE"
+            or event == "QUEST_FINISHED"
+            or event == "QUEST_LOG_UPDATE"
+            or event == "UPDATE_UI_WIDGET"
+            or event == "UPDATE_ALL_UI_WIDGETS" then
+            HidePanel()
+            return
+        end
+    end
+
     if event == "GOSSIP_SHOW" then
         -- Pre-flag hunt context eagerly so UPDATE_UI_WIDGET events refire while pins load.
         local gossipOptions = GetGossipOptionsSafe()
         if IsHuntTableContext(gossipOptions) then
             huntInteractionActive = true
             SyncNoisyEventSubscriptions()
+            QueueInteractionSnapshotPasses()
         end
-        QueueInteractionSnapshotPasses()
         return
     end
 
@@ -3002,10 +3185,15 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
-        -- Pre-flag so widget update events keep refiring while mission frame pins load.
-        huntInteractionActive = true
-        SyncNoisyEventSubscriptions()
-        QueueInteractionSnapshotPasses(true)
+        if IsMissionFrameVisible() then
+            -- Only the hunt table mission frame needs snapshot work.
+            huntInteractionActive = true
+            SyncNoisyEventSubscriptions()
+            QueueInteractionSnapshotPasses(true)
+        else
+            huntInteractionActive = false
+            SyncNoisyEventSubscriptions()
+        end
         return
     end
 
