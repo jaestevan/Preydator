@@ -14,11 +14,23 @@ local GetTime = _G.GetTime
 local GetZoneText = _G.GetZoneText
 local GetQuestLink = _G.GetQuestLink
 
+local function SafeToNumber(value)
+    local ok, converted = pcall(tonumber, value)
+    if ok then
+        return converted
+    end
+    return nil
+end
+
 local function SafeValue(value)
     if value == nil then
         return "nil"
     end
-    return tostring(value)
+    local ok, converted = pcall(tostring, value)
+    if ok then
+        return converted
+    end
+    return "<tostring failed>"
 end
 
 local function FormatTablePairs(tbl)
@@ -73,8 +85,8 @@ local function BuildQuestInspectReport(requestedQuestID)
     end
 
     local state = (type(Preydator.GetState) == "function") and Preydator.GetState() or {}
-    local liveQuestID = (C_QuestLog and C_QuestLog.GetActivePreyQuest) and tonumber(C_QuestLog.GetActivePreyQuest()) or nil
-    local questID = tonumber(requestedQuestID) or liveQuestID or tonumber(state.activeQuestID)
+    local liveQuestID = (C_QuestLog and C_QuestLog.GetActivePreyQuest) and SafeToNumber(C_QuestLog.GetActivePreyQuest()) or nil
+    local questID = SafeToNumber(requestedQuestID) or liveQuestID or SafeToNumber(state.activeQuestID)
 
     local now = GetTime and GetTime() or 0
     local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil

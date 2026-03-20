@@ -49,6 +49,13 @@ No-findings corrections versus earlier scan:
 
 Remaining scope:
 1. Monitor one test cycle with legacy inspect path gated; if no regressions, remove dead implementation body in a follow-up cleanup.
+2. Start 200-local-cap safety cleanup in `Preydator.lua`:
+  - Prioritize moving inspect/report assembly and slash parsing helpers into dedicated module-level files.
+  - Prefer shared API helpers over per-chunk local helper duplication.
+  - Keep behavior identical while reducing local-variable pressure to avoid recurring cap collisions.
+
+Optimization note:
+- Core is stable enough to run a surgical optimization pass focused on compile safety + maintainability, not feature behavior changes.
 
 Completed in this cycle:
 1. Removed unused CurrencyTracker OpenColorPicker helper.

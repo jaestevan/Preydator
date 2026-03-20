@@ -237,6 +237,36 @@ Immediate candidate extraction order:
 2. Bar/UI rendering.
 3. Diagnostics/debug helpers.
 
+### 200-Local-Cap Optimization Track (new)
+
+Goal:
+Keep `Preydator.lua` comfortably below Lua's 200 active local/upvalue ceiling so feature work can continue without compiler-pressure regressions.
+
+Planned low-risk phases:
+
+1. Measure and map pressure points:
+  - Identify top functions/chunks by local-count pressure.
+  - Keep a small margin target (for example 15-25 locals below hard cap) after each phase.
+2. Extract cohesive helper groups first (no behavior change):
+  - Slash/command parsing helpers.
+  - Inspect/report string builders.
+  - Prey state read-only formatting helpers.
+3. Move non-core diagnostics out of main runtime chunk:
+  - Keep runtime paths in `Preydator.lua`.
+  - Move inspect/debug assembly utilities into a dedicated module under `Modules/`.
+4. Normalize shared utilities through `Preydator.API`:
+  - Continue reducing duplicate helper closures in Settings/EditMode/Hunt modules.
+  - Prefer shared helpers over new per-file locals where behavior is identical.
+5. Add guardrails for future edits:
+  - During PR/release checks, run a lightweight compile/lint pass focused on local-cap safety.
+  - If a change increases chunk pressure, require a paired extraction in the same cycle.
+
+Definition of done for this track:
+
+1. Main runtime chunk no longer sits at the cap boundary during normal feature iteration.
+2. Inspect/debug enhancements can be added without requiring emergency local-trimming.
+3. Refactor keeps SavedVariables format and current public module hooks unchanged.
+
 ## Architecture Notes
 
 - Keep modular direction under Modules/.

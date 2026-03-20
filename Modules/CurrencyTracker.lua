@@ -300,15 +300,15 @@ function preyTrackerUtil.NormalizeAvailabilityCounts(source)
     end
 
     return {
-        normal = math.max(0, tonumber(source.normal) or 0),
-        hard = math.max(0, tonumber(source.hard) or 0),
-        nightmare = math.max(0, tonumber(source.nightmare) or 0),
-        capturedAt = tonumber(source.capturedAt) or (GetTime and GetTime() or 0),
+        normal = math.max(0, select(2, pcall(tonumber, source.normal)) or 0),
+        hard = math.max(0, select(2, pcall(tonumber, source.hard)) or 0),
+        nightmare = math.max(0, select(2, pcall(tonumber, source.nightmare)) or 0),
+        capturedAt = (select(2, pcall(tonumber, source.capturedAt))) or (GetTime and GetTime() or 0),
     }
 end
 
 function preyTrackerUtil.BuildScopeKey(charKey, level)
-    local normalizedLevel = tonumber(level)
+    local normalizedLevel = select(2, pcall(tonumber, level))
     if type(charKey) ~= "string" or charKey == "" or not normalizedLevel then
         return nil
     end
@@ -333,9 +333,9 @@ function preyTrackerUtil.CanonicalizeWeeklyKey(rawKey)
 end
 
 function preyTrackerUtil.MergeWeeklyCounts(target, source)
-    target.normal = math.max(0, tonumber(target.normal) or 0) + math.max(0, tonumber(source and source.normal) or 0)
-    target.hard = math.max(0, tonumber(target.hard) or 0) + math.max(0, tonumber(source and source.hard) or 0)
-    target.nightmare = math.max(0, tonumber(target.nightmare) or 0) + math.max(0, tonumber(source and source.nightmare) or 0)
+    target.normal = math.max(0, select(2, pcall(tonumber, target.normal)) or 0) + math.max(0, select(2, pcall(tonumber, source and source.normal)) or 0)
+    target.hard = math.max(0, select(2, pcall(tonumber, target.hard)) or 0) + math.max(0, select(2, pcall(tonumber, source and source.hard)) or 0)
+    target.nightmare = math.max(0, select(2, pcall(tonumber, target.nightmare)) or 0) + math.max(0, select(2, pcall(tonumber, source and source.nightmare)) or 0)
     return target
 end
 
@@ -398,7 +398,7 @@ function preyTrackerUtil.GetBestScopedAvailabilityForCharacter(charKey, level)
     for scopeKey, counts in pairs(cacheByScope) do
         if type(scopeKey) == "string" and scopeKey:sub(1, #prefix) == prefix then
             local normalized = preyTrackerUtil.NormalizeAvailabilityCounts(counts)
-            local capturedAt = normalized and tonumber(normalized.capturedAt) or -1
+            local capturedAt = normalized and (select(2, pcall(tonumber, normalized.capturedAt)) or -1) or -1
             if normalized and capturedAt >= bestCapturedAt then
                 bestCapturedAt = capturedAt
                 bestCounts = normalized
@@ -413,16 +413,22 @@ local function GetCurrencyQuantity(currencyID)
     if not C_CurrencyInfo or not C_CurrencyInfo.GetCurrencyInfo then
         return 0
     end
-    local info = C_CurrencyInfo.GetCurrencyInfo(currencyID)
-    return (info and tonumber(info.quantity)) or 0
+    local okInfo, info = pcall(C_CurrencyInfo.GetCurrencyInfo, currencyID)
+    if not okInfo or type(info) ~= "table" then
+        return 0
+    end
+    return select(2, pcall(tonumber, info.quantity)) or 0
 end
 
 local function GetCurrencyIcon(currencyID)
     if not C_CurrencyInfo or not C_CurrencyInfo.GetCurrencyInfo then
         return nil
     end
-    local info = C_CurrencyInfo.GetCurrencyInfo(currencyID)
-    return info and info.iconFileID
+    local okInfo, info = pcall(C_CurrencyInfo.GetCurrencyInfo, currencyID)
+    if not okInfo or type(info) ~= "table" then
+        return nil
+    end
+    return info.iconFileID
 end
 
 local function EnsureDB()
@@ -1899,6 +1905,30 @@ local function HandleMinimapClick(mouseButton)
 
     if mouseButton == "RightButton" then
         ToggleWarbandWindow()
+    end
+end
+
+function _G.Preydator_OnAddonCompartmentClick(_, buttonName)
+    HandleMinimapClick(buttonName or "LeftButton")
+end
+
+function _G.Preydator_OnAddonCompartmentEnter()
+    if not GameTooltip or type(GameTooltip.SetOwner) ~= "function" then
+        return
+    end
+
+    GameTooltip:SetOwner(_G.AddonCompartmentFrame or UIParent, "ANCHOR_LEFT")
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine("Preydator")
+    GameTooltip:AddLine(L["Left Click: Toggle Currency Window"], 1, 1, 1)
+    GameTooltip:AddLine(L["Right Click: Toggle Warband Window"], 1, 1, 1)
+    GameTooltip:AddLine(L["Shift + Right Click: Open Options"], 1, 1, 1)
+    GameTooltip:Show()
+end
+
+function _G.Preydator_OnAddonCompartmentLeave()
+    if GameTooltip and type(GameTooltip.Hide) == "function" then
+        GameTooltip:Hide()
     end
 end
 

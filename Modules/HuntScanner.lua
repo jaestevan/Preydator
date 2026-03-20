@@ -1026,13 +1026,32 @@ local function BuildRewardSummary(questID)
         local rewards = {}
 
         if C_QuestLog and type(C_QuestLog.GetQuestRewardCurrencies) == "function" then
-            local rewardCurrencies = C_QuestLog.GetQuestRewardCurrencies(id)
+            local okRewardCurrencies, rewardCurrencies = pcall(C_QuestLog.GetQuestRewardCurrencies, id)
+            if not okRewardCurrencies then
+                rewardCurrencies = nil
+            end
             if type(rewardCurrencies) == "table" and #rewardCurrencies > 0 and type(C_QuestLog.GetQuestRewardCurrencyInfo) == "function" then
                 for index = 1, #rewardCurrencies do
-                    local info = C_QuestLog.GetQuestRewardCurrencyInfo(id, index, false)
+                    local okInfo, info = pcall(C_QuestLog.GetQuestRewardCurrencyInfo, id, index, false)
+                    if not okInfo then
+                        info = nil
+                    end
                     if type(info) == "table" then
-                        local amount = tonumber(info.quantity or info.totalRewardAmount or info.numCurrency or 0) or 0
-                        local name = info.name or info.currencyName or (info.currencyID and ("Currency " .. tostring(info.currencyID))) or nil
+                        local amount = SafeToNumber(info.quantity)
+                            or SafeToNumber(info.totalRewardAmount)
+                            or SafeToNumber(info.numCurrency)
+                            or 0
+                        local currencyID = SafeToNumber(info.currencyID)
+                        local name = SafeToString(info.name)
+                        if name == "<protected string>" or name == "<unprintable>" or name == "" then
+                            name = SafeToString(info.currencyName)
+                        end
+                        if (name == "<protected string>" or name == "<unprintable>" or name == "") and currencyID then
+                            name = "Currency " .. tostring(currencyID)
+                        end
+                        if name == "<protected string>" or name == "<unprintable>" or name == "" then
+                            name = nil
+                        end
                         local icon = info.iconFileID or info.icon or info.textureFileID or info.iconTexture or info.texture
                         local iconTag = BuildIconTag(icon)
                         if name and amount > 0 then

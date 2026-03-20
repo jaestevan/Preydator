@@ -21,6 +21,44 @@ local UIDropDownMenu_AddButton = _G.UIDropDownMenu_AddButton
 local ColorPickerFrame = _G.ColorPickerFrame
 local OpacitySliderFrame = _G.OpacitySliderFrame
 local C_CurrencyInfo = _G.C_CurrencyInfo
+local hooksecurefunc = _G.hooksecurefunc
+
+local preydatorDropdownRegistry = setmetatable({}, { __mode = "k" })
+local dropdownScaleHookInstalled = false
+
+local function ApplyDropdownListScale(level, dropDownFrame)
+    if not dropDownFrame or not dropDownFrame.GetEffectiveScale then
+        return
+    end
+
+    local listFrame = _G["DropDownList" .. tostring(level or 1)]
+    if not listFrame or not listFrame.SetScale then
+        return
+    end
+
+    local uiScale = (UIParent and UIParent.GetEffectiveScale and UIParent:GetEffectiveScale()) or 1
+    if uiScale <= 0 then
+        uiScale = 1
+    end
+
+    local desiredScale = dropDownFrame:GetEffectiveScale() / uiScale
+    listFrame:SetScale(desiredScale)
+end
+
+local function EnsureDropdownScaleHook()
+    if dropdownScaleHookInstalled or type(hooksecurefunc) ~= "function" then
+        return
+    end
+
+    hooksecurefunc("ToggleDropDownMenu", function(level, _, dropDownFrame)
+        if not dropDownFrame or not preydatorDropdownRegistry[dropDownFrame] then
+            return
+        end
+        ApplyDropdownListScale(level, dropDownFrame)
+    end)
+
+    dropdownScaleHookInstalled = true
+end
 
 local COLUMN_LEFT_X = 5
 local COLUMN_RIGHT_X = 221
@@ -355,6 +393,8 @@ local function CreateDropdown(parent, x, y, label, width, options, getter, sette
 
     local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
     dropdown:SetPoint("TOPLEFT", title, "BOTTOMLEFT", -16, -4)
+    preydatorDropdownRegistry[dropdown] = true
+    EnsureDropdownScaleHook()
 
     local function GetOptions()
         if type(options) == "function" then
@@ -954,7 +994,7 @@ local function BuildHuntPage(owner, parent)
     end
 
     local knownCharacters = GetKnownWarbandCharacters()
-    local contentHeight = math.max(1428, 1108 + (math.ceil(#knownCharacters / 2) * 28))
+    local contentHeight = math.max(1594, 1274 + (math.ceil(#knownCharacters / 2) * 28))
 
     local contentViewport = CreateFrame("ScrollFrame", nil, parent)
     contentViewport:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
@@ -1101,7 +1141,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackHuntControl(CreateCheckbox(content, COLUMN_RIGHT_X, -292, L["Show Quest Reward Icons"], function()
+    TrackHuntControl(CreateCheckbox(content, COLUMN_RIGHT_X, -300, L["Show Quest Reward Icons"], function()
         return db.huntScannerShowRewardIcons ~= false
     end, function(value)
         db.huntScannerShowRewardIcons = value and true or false
@@ -1109,34 +1149,34 @@ local function BuildHuntPage(owner, parent)
     end))
 
     -- Currency section
-    CreateSectionTitle(content, COLUMN_LEFT_X, -334, L["Currency Panel"])
-    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -334, 180, L["Open Currency"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -356, L["Currency Panel"])
+    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -356, 180, L["Open Currency"], function()
         ToggleCurrencyPanel()
     end)
     TrackCurrencyControl(currencyToggleButton)
     currencyToggleButton.PreydatorRefresh = function(self)
         self:SetText((db.currencyWindowEnabled == true) and L["Close Currency"] or L["Open Currency"])
     end
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -364, L["Show Random Hunts Available"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -392, L["Show Random Hunts Available"], function()
         return db.currencyShowAffordableHunts == true
     end, function(value)
         db.currencyShowAffordableHunts = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -392, L["Hide Currency in Instance"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -422, L["Hide Currency in Instance"], function()
         return db.currencyWindowHideInInstance == true
     end, function(value)
         db.currencyWindowHideInInstance = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
 
-    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -426, L["Gain Color"], function()
+    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -462, L["Gain Color"], function()
         return db.currencyDeltaGainColor or { 0.15, 0.9, 0.35, 1 }
     end, function(color)
         db.currencyDeltaGainColor = { color[1], color[2], color[3], color[4] }
         RefreshCurrencyTrackerPanel()
     end, true))
-    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -428, L["Spend Color"], function()
+    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -506, L["Spend Color"], function()
         return db.currencyDeltaLossColor or { 0.95, 0.25, 0.2, 1 }
     end, function(color)
         db.currencyDeltaLossColor = { color[1], color[2], color[3], color[4] }
@@ -1144,7 +1184,7 @@ local function BuildHuntPage(owner, parent)
     end, true))
 
     local previewTitle = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    previewTitle:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -464)
+    previewTitle:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -552)
     previewTitle:SetText(L["Delta Preview"])
 
     local function ResolveCurrencyThemeSurface(key, colorKey)
@@ -1184,9 +1224,9 @@ local function BuildHuntPage(owner, parent)
     end
 
     local previewBoxes = {
-        CreateDeltaPreviewBox(COLUMN_LEFT_X, -484),
-        CreateDeltaPreviewBox(COLUMN_LEFT_X + 46, -484),
-        CreateDeltaPreviewBox(COLUMN_LEFT_X + 92, -484),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X, -574),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X + 46, -574),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X + 92, -574),
     }
 
     RegisterRefresher(owner, {
@@ -1208,7 +1248,7 @@ local function BuildHuntPage(owner, parent)
         end,
     })
 
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -332, L["Currency Width"], 240, 520, 4, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -404, L["Currency Width"], 240, 520, 4, function()
         return db.currencyWindowWidth or 336
     end, function(value)
         db.currencyWindowWidth = math.floor(value + 0.5)
@@ -1216,7 +1256,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -384, L["Currency Height"], 64, 700, 4, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -458, L["Currency Height"], 64, 700, 4, function()
         return db.currencyWindowHeight or 280
     end, function(value)
         db.currencyWindowHeight = math.floor(value + 0.5)
@@ -1224,7 +1264,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -436, L["Currency Font Size"], 10, 24, 1, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -512, L["Currency Font Size"], 10, 24, 1, function()
         return db.currencyWindowFontSize or 12
     end, function(value)
         db.currencyWindowFontSize = math.floor(value + 0.5)
@@ -1232,7 +1272,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -488, L["Currency Scale"], 0.70, 1.40, 0.05, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -566, L["Currency Scale"], 0.70, 1.40, 0.05, function()
         return db.currencyWindowScale or 1.00
     end, function(value)
         db.currencyWindowScale = value
@@ -1242,52 +1282,52 @@ local function BuildHuntPage(owner, parent)
     end))
 
     -- Warband section
-    CreateSectionTitle(content, COLUMN_LEFT_X, -568, L["Warband Panel"])
-    local warbandToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -568, 180, L["Open Warband"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -694, L["Warband Panel"])
+    local warbandToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -694, 180, L["Open Warband"], function()
         ToggleWarbandPanel()
     end)
     TrackWarbandControl(warbandToggleButton)
     warbandToggleButton.PreydatorRefresh = function(self)
         self:SetText((db.currencyWarbandWindowEnabled == true) and L["Close Warband"] or L["Open Warband"])
     end
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -628, L["Show Realm"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -754, L["Show Realm"], function()
         return db.currencyShowRealmInWarband == true
     end, function(value)
         db.currencyShowRealmInWarband = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -656, L["Track Alts Weekly"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -782, L["Track Alts Weekly"], function()
         return db.currencyWarbandShowPreyTrack ~= false
     end, function(value)
         db.currencyWarbandShowPreyTrack = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -684, L["Show Prey Weekly Completed"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -810, L["Show Prey Weekly Completed"], function()
         return db.currencyWarbandPreyMode == "completed"
     end, function(value)
         db.currencyWarbandPreyMode = value and "completed" or "available"
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -712, L["Hide Low Level Alts (78)"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -838, L["Hide Low Level Alts (78)"], function()
         return db.currencyWarbandHideLowLevel == true
     end, function(value)
         db.currencyWarbandHideLowLevel = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -740, L["Use Icons for Warband Currencies"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -866, L["Use Icons for Warband Currencies"], function()
         return db.currencyWarbandUseIcons == true
     end, function(value)
         db.currencyWarbandUseIcons = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -768, L["Hide Warband in Instance"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -894, L["Hide Warband in Instance"], function()
         return db.currencyWarbandWindowHideInInstance == true
     end, function(value)
         db.currencyWarbandWindowHideInInstance = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
 
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -598, L["Warband Width"], 150, 900, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -724, L["Warband Width"], 150, 900, 1, function()
         return db.currencyWarbandWidth or 420
     end, function(value)
         db.currencyWarbandWidth = math.floor(value + 0.5)
@@ -1295,7 +1335,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -650, L["Warband Height"], 80, 600, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -776, L["Warband Height"], 80, 600, 1, function()
         return db.currencyWarbandHeight or 250
     end, function(value)
         db.currencyWarbandHeight = math.floor(value + 0.5)
@@ -1303,7 +1343,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -702, L["Warband Font Size"], 10, 24, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -828, L["Warband Font Size"], 10, 24, 1, function()
         return db.currencyWarbandFontSize or 12
     end, function(value)
         db.currencyWarbandFontSize = math.floor(value + 0.5)
@@ -1311,7 +1351,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -754, L["Warband Scale"], 0.70, 1.40, 0.05, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -880, L["Warband Scale"], 0.70, 1.40, 0.05, function()
         return db.currencyWarbandScale or 1.0
     end, function(value)
         db.currencyWarbandScale = value
@@ -1320,11 +1360,11 @@ local function BuildHuntPage(owner, parent)
         return string.format("%.2f", value)
     end))
 
-    CreateSectionTitle(content, COLUMN_LEFT_X, -854, L["Characters in Tracker"])
-    TrackWarbandControl(CreateActionButton(content, COLUMN_LEFT_X, -854, 180, L["Select All Characters"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -980, L["Characters in Tracker"])
+    TrackWarbandControl(CreateActionButton(content, COLUMN_LEFT_X, -1012, 180, L["Select All Characters"], function()
         SetAllWarbandCharactersShown(true)
     end))
-    TrackWarbandControl(CreateActionButton(content, COLUMN_RIGHT_X, -854, 200, L["Remove Unchecked Characters"], function()
+    TrackWarbandControl(CreateActionButton(content, COLUMN_RIGHT_X, -1012, 200, L["Remove Unchecked Characters"], function()
         PurgeHiddenWarbandCharacters()
     end))
     for index, entry in ipairs(knownCharacters) do
@@ -1333,7 +1373,7 @@ local function BuildHuntPage(owner, parent)
         local label = entry.charKey .. levelSuffix
         local rowIndex = math.floor((index - 1) / 2)
         local columnX = ((index - 1) % 2 == 0) and COLUMN_LEFT_X or COLUMN_RIGHT_X
-        TrackWarbandControl(CreateCheckbox(content, columnX, -882 - (rowIndex * 28), label, function()
+        TrackWarbandControl(CreateCheckbox(content, columnX, -1046 - (rowIndex * 28), label, function()
             return IsWarbandCharacterShown(entry.charKey)
         end, function(value)
             SetWarbandCharacterShown(entry.charKey, value and true or false)
@@ -1341,7 +1381,7 @@ local function BuildHuntPage(owner, parent)
     end
     if #knownCharacters == 0 then
         local emptyNote = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        emptyNote:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -882)
+        emptyNote:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -1046)
         emptyNote:SetWidth(300)
         emptyNote:SetJustifyH("LEFT")
         emptyNote:SetWordWrap(true)

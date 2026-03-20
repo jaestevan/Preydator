@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.3 - 2026-03-20
+
+### Changed
+- `/pd inspect` output now includes the addon version number (`addon=x.y.z`) alongside the inspect schema version, making it immediately clear from a screenshot whether a player is on the latest release.
+- Sound dropdowns now include a `None` option for each stage and Ambush so players can mute specific alerts directly from settings without disabling all sounds. (Credit: SirNorek)
+
+### Fixed
+- Dropdown popup menus now scale correctly on 4K / high-DPI monitors. `UIDropDownMenuTemplate` popup lists (`DropDownList1`) are parented to UIParent and do not automatically inherit the effective scale of the Settings panel; on 4K where UI scale is low (≈0.64), popups appeared too small and misaligned. Fixed by hooking `ToggleDropDownMenu` to normalize dropdown list scale to the effective scale ratio of the opening frame on every open event. (Credit: npi6666)
+- HuntScanner reward probing now avoids raw arithmetic/coercion on protected Blizzard quest reward values, preventing `MoneyFrame_Update` secret-number taint when hovering world-map quest rewards.
+- Core/Currency/Debug inspect paths now use protected numeric/string coercion for Blizzard API payload fields to reduce secret-value taint spillover outside HuntScanner-specific reward probes.
+- Fixed a core dropdown localization regression (`attempt to index global 'L'`) by routing the `None` sound option label through `_G.PreydatorL` in `Preydator.lua`.
+- Hardened bar position persistence so backup coordinates are only synced on explicit position changes (drag/save/reset), preventing generic apply/refresh paths from rewriting cached coordinates and causing post-reset/reload jumps.
+- Backup restore now only repairs missing/invalid bar point data and no longer overwrites valid saved coordinates during load.
+- Bar position clamping during login/world-enter no longer modifies saved coordinates; clamp is applied only to the live frame placement, preventing login-time screen metrics from reducing valid saved Y coordinates (e.g., 472 → 362). Position reapplies on `PLAYER_ENTERING_WORLD` to settle final UI dimensions.
+- Panels tab spacing was increased in Currency/Warband sections to remove tight stacking/overlap, including a targeted +8px downward offset for `Show Quest Reward Icons`.
+
 ## 2.0.2 - 2026-03-20
 
 ### Fixed

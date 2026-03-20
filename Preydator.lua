@@ -675,13 +675,22 @@ local function RestoreBarPointFromBackup()
         return
     end
 
+    settings.point = settings.point or {}
+    local pointX = tonumber(settings.point.x)
+    local pointY = tonumber(settings.point.y)
+
+    -- Do not overwrite valid point coordinates with backup values.
+    -- Backup restore is only for recovering missing/invalid point data.
+    if pointX ~= nil and pointY ~= nil then
+        return
+    end
+
     local x = tonumber(settings.barPointX)
     local y = tonumber(settings.barPointY)
     if x == nil or y == nil then
         return
     end
 
-    settings.point = settings.point or {}
     settings.point.anchor = "CENTER"
     settings.point.relativePoint = "CENTER"
     settings.point.x = Round(x)
@@ -1488,6 +1497,10 @@ local function BuildSoundDropdownOptions()
     local options = {}
     local files = (settings and settings.soundFileNames) or DEFAULT_SOUND_FILENAMES
 
+    options["__NONE__"] = {
+        text = _G.PreydatorL["None"],
+    }
+
     for _, fileName in ipairs(files) do
         local normalized = NormalizeSoundFileName(fileName)
         if normalized then
@@ -1503,6 +1516,9 @@ end
 
 local function ResolveAmbushAlertSoundPath()
     local path = settings and settings.ambushSoundPath
+    if path == "__NONE__" then
+        return nil
+    end
     if type(path) == "string" and path ~= "" then
         return path
     end
@@ -1830,6 +1846,10 @@ local function ResolveStageSoundPath(stage)
     local sounds = settings.stageSounds
 
     local savedPath = sounds[stage]
+    if savedPath == "__NONE__" then
+        AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=none", false)
+        return nil
+    end
     if type(savedPath) == "string" and savedPath ~= "" then
         AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=" .. savedPath, false)
         return savedPath
@@ -1997,10 +2017,9 @@ ApplyBarSettings = function()
         point.x, point.y = barPositionUtil.GetDefaultPoint(scaledWidth, scaledHeight)
     end
 
-    point.x, point.y = barPositionUtil.ClampToScreen(point.x, point.y, scaledWidth, scaledHeight)
+    local clampedX, clampedY = barPositionUtil.ClampToScreen(point.x, point.y, scaledWidth, scaledHeight)
     point.anchor = anchor
     point.relativePoint = relativePoint
-    SyncBarPointToBackup()
 
     if orientation == ORIENTATION_VERTICAL then
         settings.verticalScale = frameScale
@@ -2013,7 +2032,7 @@ ApplyBarSettings = function()
     UI.barFrame:SetFrameStrata("MEDIUM")
     UI.barFrame:SetFrameLevel(5)
     UI.barFrame:ClearAllPoints()
-    UI.barFrame:SetPoint("CENTER", UIParent, "CENTER", point.x, point.y)
+    UI.barFrame:SetPoint("CENTER", UIParent, "CENTER", clampedX, clampedY)
 
     if UI.barFill then
         local fill = settings.fillColor
@@ -2731,7 +2750,12 @@ local function ExtractQuestObjectivePercent(questID)
 
     local questBarPct = nil
     if GetQuestProgressBarPercent then
-        local rawQuestBarPct = tonumber(GetQuestProgressBarPercent(questID))
+        local okQuestBarPct, rawQuestBarPct = pcall(function()
+            return tonumber(GetQuestProgressBarPercent(questID))
+        end)
+        if not okQuestBarPct then
+            rawQuestBarPct = nil
+        end
         if rawQuestBarPct ~= nil then
             questBarPct = ClampPercent(rawQuestBarPct)
         end
@@ -2752,14 +2776,35 @@ local function ExtractQuestObjectivePercent(questID)
 
     for _, objective in ipairs(objectives) do
         if type(objective) == "table" then
-            local fulfilled = tonumber(objective.numFulfilled)
-            local required = tonumber(objective.numRequired)
+            local okFulfilled, fulfilled = pcall(function()
+                return tonumber(objective.numFulfilled)
+            end)
+            local okRequired, required = pcall(function()
+                return tonumber(objective.numRequired)
+            end)
+
+            if not okFulfilled then
+                fulfilled = nil
+            end
+            if not okRequired then
+                required = nil
+            end
 
             if fulfilled == nil then
-                fulfilled = tonumber(objective.fulfilled)
+                local okLegacyFulfilled, legacyFulfilled = pcall(function()
+                    return tonumber(objective.fulfilled)
+                end)
+                if okLegacyFulfilled then
+                    fulfilled = legacyFulfilled
+                end
             end
             if required == nil then
-                required = tonumber(objective.required)
+                local okLegacyRequired, legacyRequired = pcall(function()
+                    return tonumber(objective.required)
+                end)
+                if okLegacyRequired then
+                    required = legacyRequired
+                end
             end
 
             if fulfilled ~= nil and required == nil and objective.finished ~= nil then
@@ -3705,7 +3750,10 @@ local function ApplySuppressionToParentChain(frameRef, suppress, maxDepth)
 end
 
 local function FindGlobalFramesForWidgetID(widgetID, forceRefresh)
-    widgetID = tonumber(widgetID)
+    local okWidgetID, numericWidgetID = pcall(function()
+        return tonumber(widgetID)
+    end)
+    widgetID = okWidgetID and numericWidgetID or nil
     if not widgetID then
         return {}
     end
@@ -3991,18 +4039,22 @@ NormalizeSoundSettings = function()
             configuredPath = nil
         end
 
-        if type(configuredPath) ~= "string" or configuredPath == "" then
-            configuredPath = GetDefaultStageSoundPath(stage)
-        end
+        if configuredPath ~= "__NONE__" then
+            if type(configuredPath) ~= "string" or configuredPath == "" then
+                configuredPath = GetDefaultStageSoundPath(stage)
+            end
 
-        if type(configuredPath) ~= "string" or not allowedPathLower[string.lower(configuredPath)] then
-            configuredPath = GetDefaultStageSoundPath(stage)
+            if type(configuredPath) ~= "string" or not allowedPathLower[string.lower(configuredPath)] then
+                configuredPath = GetDefaultStageSoundPath(stage)
+            end
         end
 
         settings.stageSounds[stage] = configuredPath
     end
 
-    if type(settings.ambushSoundPath) ~= "string" or not allowedPathLower[string.lower(settings.ambushSoundPath)] then
+    if settings.ambushSoundPath ~= "__NONE__"
+        and (type(settings.ambushSoundPath) ~= "string" or not allowedPathLower[string.lower(settings.ambushSoundPath)])
+    then
         settings.ambushSoundPath = KILL_SOUND_PATH
     end
 
@@ -4471,7 +4523,7 @@ local function PrintInspectState(outputMode)
     local waypointMapID, waypointX, waypointY = TryGetPreyQuestWaypoint(liveQuestID)
     local canResolveWaypoint = waypointMapID and waypointX and waypointY
 
-    add("Preydator Inspect (" .. INSPECT_VERSION .. ")")
+    add("Preydator Inspect (" .. INSPECT_VERSION .. ") | addon=" .. tostring((C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("Preydator", "Version")) or "?"))
     add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. tostring(playerMapID) .. " | playerMap=" .. tostring(playerMapName))
     add("- quest live=" .. tostring(liveQuestID) .. " | hasActive=" .. tostring(hasActiveQuest) .. " | isOnQuest=" .. tostring(questOnLog) .. " | completed=" .. tostring(questCompleted))
     add("- quest tracked=" .. tostring(state.activeQuestID) .. " | progressState=" .. tostring(state.progressState) .. " | progressPercent=" .. tostring(state.progressPercent) .. " | stage=" .. tostring(state.stage) .. " (" .. tostring(GetStageLabel(state.stage)) .. ")")
@@ -4991,7 +5043,6 @@ local function OnAddonLoaded()
     NormalizeColorSettings()
     RestoreBarPointFromBackup()
     NormalizeDisplaySettings()
-    SyncBarPointToBackup()
     NormalizeProgressSettings()
     NormalizeAmbushSettings()
     ApplyDefaultPreyIconVisibility()
@@ -5918,8 +5969,8 @@ Preydator.API = {
 }
 
 local function HandleSlashCommand(message)
-    local trimmed = (message or ""):match("^%s*(.-)%s*$")
-    local command, rest = trimmed:match("^(%S+)%s*(.-)$")
+    message = (message or ""):match("^%s*(.-)%s*$")
+    local command, rest = message:match("^(%S+)%s*(.-)$")
     local text = string.lower(command or "")
 
     if text == "debug" then
@@ -6036,6 +6087,9 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         or event == "ZONE_CHANGED_INDOORS"
         or event == "ZONE_CHANGED_NEW_AREA" then
         state.zoneCacheDirty = true
+        if event == "PLAYER_ENTERING_WORLD" and UI.barFrame then
+            ApplyBarSettings()
+        end
     end
 
     -- Gate module fanout for noisy UI widget events when no prey context exists
