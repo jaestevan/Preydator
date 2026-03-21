@@ -26,7 +26,7 @@ Players choose Preydator because it delivers:
 
 Preydator is a focused, Midnight‑specific companion designed to enhance the hunt without overwhelming your screen or your workflow.
 
-### Major Features (v2.0.1)
+### Major Features (v2.0.5)
 
 *   Real‑time prey stage tracking with fallback percent modes
 *   Predator‑style audio cues for stages and ambushes

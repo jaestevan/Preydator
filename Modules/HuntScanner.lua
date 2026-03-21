@@ -3149,10 +3149,18 @@ huntEventFrame:RegisterEvent("QUEST_FINISHED")
 huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     local noisyEvent = (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS")
     local isRestrictedInstance = IsInRestrictedInstance()
-    local hasActiveQuest = HasActivePreyQuest()
-    local hasHuntContext = (not isRestrictedInstance) and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or hasActiveQuest)
+    local hasHuntContext = nil
+    local function GetHasHuntContext()
+        if hasHuntContext ~= nil then
+            return hasHuntContext
+        end
 
-    if (not noisyEvent) or hasHuntContext then
+        hasHuntContext = (not isRestrictedInstance)
+            and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or HasActivePreyQuest())
+        return hasHuntContext
+    end
+
+    if (not noisyEvent) or GetHasHuntContext() then
         RecordEvent(event, ...)
     end
 
@@ -3165,7 +3173,7 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
-    if (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS") and hasHuntContext then
+    if (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS") and GetHasHuntContext() then
         ProcessRewardCacheLifecycle()
     end
 
@@ -3241,7 +3249,7 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         or event == "UPDATE_ALL_UI_WIDGETS"
         or event == "QUEST_LOG_UPDATE"
     then
-        if hasHuntContext then
+        if GetHasHuntContext() then
             QueueInteractionSnapshotPasses()
         end
         return

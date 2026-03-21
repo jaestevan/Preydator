@@ -3020,10 +3020,12 @@ local function RefreshWarbandWindowDisplay()
         end
     end
 
+    -- Always sum ALL shown characters regardless of realm collapse state.
+    -- displayRows omits character rows for collapsed realms, so use rows instead.
     local displayTotals = {}
     for _, e in ipairs(CURRENCY_ALLOW_LIST) do displayTotals[e.id] = 0 end
-    for _, data in ipairs(displayRows) do
-        if data.type == "character" and data.snaps then
+    for _, data in ipairs(rows) do
+        if data.snaps then
             for _, e in ipairs(CURRENCY_ALLOW_LIST) do
                 displayTotals[e.id] = displayTotals[e.id] + ((data.snaps[e.id] and data.snaps[e.id].quantity) or 0)
             end

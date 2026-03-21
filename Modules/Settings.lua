@@ -818,7 +818,7 @@ local function BuildGlobalTopStrip(owner, parent)
     -- Lock Frame checkbox
     local lockCheck = CreateCheckbox(stripFrame, currentX - 5, -7, L["Lock Frame"], function() return db.locked end, function(value)
         db.locked = value
-        api.ApplyBarSettings()
+        api.RequestBarRefresh()
     end)
     lockCheck:SetSize(24, 24)
     controls[#controls + 1] = lockCheck
@@ -2896,31 +2896,14 @@ local function BuildProfilesPage(owner, parent)
     local PROFILE_DROPDOWN_WIDTH = 170
     local PROFILE_BUTTON_WIDTH = 170
 
-    local function IsProfileApiAvailable()
-        return type(api.GetActiveProfileName) == "function"
-            and type(api.GetAllProfileNames) == "function"
-            and type(api.SwitchToProfile) == "function"
-            and type(api.ResetCurrentProfile) == "function"
-            and type(api.CreateProfile) == "function"
-            and type(api.DeleteProfile) == "function"
-            and type(api.CopyProfileFrom) == "function"
-    end
-
-    local profileApiAvailable = IsProfileApiAvailable()
-
     local function GetActiveProfileNameSafe()
-        if type(api.GetActiveProfileName) == "function" then
-            return api.GetActiveProfileName() or "Default"
-        end
-        return "Default"
+        return api.GetActiveProfileName() or "Default"
     end
 
     local function GetAllProfileNamesSafe()
-        if type(api.GetAllProfileNames) == "function" then
-            local names = api.GetAllProfileNames()
-            if type(names) == "table" and #names > 0 then
-                return names
-            end
+        local names = api.GetAllProfileNames()
+        if type(names) == "table" and #names > 0 then
+            return names
         end
         return { "Default" }
     end
@@ -2992,9 +2975,6 @@ local function BuildProfilesPage(owner, parent)
             return GetActiveProfileNameSafe()
         end,
         function(key)
-            if type(api.SwitchToProfile) ~= "function" then
-                return
-            end
             if key ~= GetActiveProfileNameSafe() then
                 api.SwitchToProfile(key)
                 parent.PreydatorCopyFromProfile = ResolveAlternateProfile(parent.PreydatorCopyFromProfile)
@@ -3008,10 +2988,6 @@ local function BuildProfilesPage(owner, parent)
     CreateProfileNote(PROFILE_RIGHT_X, -126, PROFILE_NOTE_WIDTH, L["Reset the active profile or delete another unused profile."])
 
     CreateActionButton(parent, PROFILE_RIGHT_X, -170, PROFILE_BUTTON_WIDTH, L["Reset to Defaults"], function()
-        if type(api.ResetCurrentProfile) ~= "function" then
-            print("Preydator: " .. L["Profile management is unavailable in this build."])
-            return
-        end
         api.ResetCurrentProfile()
         owner:RefreshControls()
     end)
@@ -3033,10 +3009,6 @@ local function BuildProfilesPage(owner, parent)
         local profileName = ResolveAlternateProfile(parent.PreydatorDeleteProfile)
         if not profileName then
             print("Preydator: " .. L["No removable profile is available."])
-            return
-        end
-        if type(api.DeleteProfile) ~= "function" then
-            print("Preydator: " .. L["Profile management is unavailable in this build."])
             return
         end
         local ok, err = api.DeleteProfile(profileName)
@@ -3079,23 +3051,16 @@ local function BuildProfilesPage(owner, parent)
             print("Preydator: " .. L["Please enter a profile name."])
             return
         end
-        if type(api.CreateProfile) ~= "function" then
-            print("Preydator: " .. L["Profile management is unavailable in this build."])
-            return
-        end
         local copyFrom = newNameEdit.copyCurrentEnabled and GetActiveProfileNameSafe() or nil
         local ok, err = api.CreateProfile(name, copyFrom)
         if not ok then
             print("Preydator: " .. tostring(err))
             return
         end
-        if type(api.SwitchToProfile) == "function" then
-            api.SwitchToProfile(name)
-        end
         newNameEdit:SetText("")
         newNameEdit.copyCurrentEnabled = false
-        parent.PreydatorCopyFromProfile = ResolveAlternateProfile(parent.PreydatorCopyFromProfile)
-        parent.PreydatorDeleteProfile = ResolveAlternateProfile(parent.PreydatorDeleteProfile)
+        parent.PreydatorCopyFromProfile = name
+        parent.PreydatorDeleteProfile = name
         owner:RefreshControls()
     end)
 
@@ -3119,10 +3084,6 @@ local function BuildProfilesPage(owner, parent)
         local sourceName = ResolveAlternateProfile(parent.PreydatorCopyFromProfile)
         if not sourceName then
             print("Preydator: " .. L["Select a source profile first."])
-            return
-        end
-        if type(api.CopyProfileFrom) ~= "function" then
-            print("Preydator: " .. L["Profile management is unavailable in this build."])
             return
         end
         api.CopyProfileFrom(sourceName)
@@ -3155,15 +3116,6 @@ local function BuildProfilesPage(owner, parent)
         end,
     })
 
-    if not profileApiAvailable then
-        local unavailableNote = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        unavailableNote:SetPoint("TOPLEFT", parent, "TOPLEFT", PROFILE_LEFT_X, -468)
-        unavailableNote:SetWidth(500)
-        unavailableNote:SetJustifyH("LEFT")
-        unavailableNote:SetWordWrap(true)
-        unavailableNote:SetText(L["Profile management is unavailable in this build."])
-        unavailableNote:SetTextColor(1.0, 0.82, 0.30)
-    end
 end
 
 local function BuildAdvancedPage(owner, parent)

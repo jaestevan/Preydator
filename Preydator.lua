@@ -448,6 +448,8 @@ local state = {
     playerMapID = nil,
     playerMapHierarchy = nil,
     zoneCacheDirty = true,
+    pollingActive = false,
+    nextPollingEligibilityCheckAt = 0,
 }
 
 local UPDATE_INTERVAL_SECONDS = 0.5
@@ -5049,9 +5051,92 @@ local function UpdatePreyState()
     UpdateBarDisplay()
 end
 
-local function OnAddonLoaded()
-    _G.PreydatorDB = _G.PreydatorDB or {}
-    settings = _G.PreydatorDB
+function Preydator:ShouldUseActivePolling()
+    local now = GetTime and GetTime() or 0
+    local trackedQuestID = state and state.activeQuestID or nil
+    local hasTrackedQuest = IsValidQuestID(trackedQuestID) and IsQuestStillActive(trackedQuestID)
+    local liveQuestID = GetCurrentActivePreyQuestCached(ACTIVE_PREY_QUEST_CACHE_SECONDS)
+    local hasLiveQuest = IsValidQuestID(liveQuestID) and IsQuestStillActive(liveQuestID)
+    local needsQuestBootstrap = hasLiveQuest and not hasTrackedQuest
+    local inKillCarry = ((state and state.killStageUntil) or 0) > now
+    local inAmbushAlert = ((state and state.ambushAlertUntil) or 0) > now
+    local inQuestListenBurst = ((state and state.questListenUntil) or 0) > now
+    local inEditPreview = settings and settings.showInEditMode == true and IsEditModePreviewActive() == true
+    local forceShowBar = state and state.forceShowBar == true
+    local hasHotQuestContext = hasTrackedQuest and state and state.inPreyZone == true
+
+    return needsQuestBootstrap
+        or inKillCarry
+        or inAmbushAlert
+        or inQuestListenBurst
+        or inEditPreview
+        or forceShowBar
+        or hasHotQuestContext
+end
+
+function Preydator:SetPollingActive(enabled)
+    if not frame then
+        return
+    end
+
+    local shouldEnable = enabled == true
+    if shouldEnable == (state.pollingActive == true) then
+        return
+    end
+
+    state.pollingActive = shouldEnable
+
+    if shouldEnable then
+        state.nextPollingEligibilityCheckAt = 0
+        frame:SetScript("OnUpdate", function(_, elapsed)
+            state.elapsedSinceUpdate = (state.elapsedSinceUpdate or 0) + (elapsed or 0)
+            local now = GetTime and GetTime() or 0
+            local inKillCarry = ((state and state.killStageUntil) or 0) > now
+            local inAmbushAlert = ((state and state.ambushAlertUntil) or 0) > now
+            local inQuestListenBurst = ((state and state.questListenUntil) or 0) > now
+            local inEditPreview = settings and settings.showInEditMode == true and IsEditModePreviewActive() == true
+            local recentlySawWidget = (now - ((state and state.lastWidgetSeenAt) or 0)) <= 2.0
+            local progressState = tonumber(state and state.progressState)
+            local isIdleInZone = IsValidQuestID(state and state.activeQuestID)
+                and state.inPreyZone == true
+                and (progressState == nil or progressState == 0)
+                and not recentlySawWidget
+                and not inKillCarry
+                and not inAmbushAlert
+                and not inQuestListenBurst
+                and not (state and state.forceShowBar == true)
+                and not inEditPreview
+            local interval = isIdleInZone and 2.0 or UPDATE_INTERVAL_SECONDS
+            if state.elapsedSinceUpdate < interval then
+                return
+            end
+
+            state.elapsedSinceUpdate = 0
+            UpdatePreyState()
+
+            if now >= (state.nextPollingEligibilityCheckAt or 0) then
+                state.nextPollingEligibilityCheckAt = now + 2.0
+                if not Preydator:ShouldUseActivePolling() then
+                    Preydator:SetPollingActive(false)
+                end
+            end
+        end)
+    else
+        state.elapsedSinceUpdate = 0
+        state.nextPollingEligibilityCheckAt = 0
+        frame:SetScript("OnUpdate", nil)
+    end
+end
+
+function Preydator:ApplyRuntimeSettings(nextSettings, emitProfileHook, refreshUi)
+    if type(nextSettings) == "table" then
+        settings = nextSettings
+    end
+
+    if type(settings) ~= "table" then
+        return
+    end
+
     ApplyDefaults(settings, DEFAULTS)
     EnsureDebugDB()
     debugDB.enabled = settings.debugSounds and true or false
@@ -5064,9 +5149,37 @@ local function OnAddonLoaded()
     NormalizeProgressSettings()
     NormalizeAmbushSettings()
     ApplyDefaultPreyIconVisibility()
-    AddDebugLog("OnAddonLoaded", "debug=" .. tostring(debugDB.enabled) .. " | stage" .. tostring(MAX_STAGE) .. "=" .. tostring(settings.stageSounds[MAX_STAGE]), true)
 
     state.forceShowBar = settings.forceShowBar
+
+    if refreshUi then
+        ApplyBarSettings()
+        UpdateBarDisplay()
+        Preydator:SetPollingActive(Preydator:ShouldUseActivePolling())
+    end
+
+    if emitProfileHook then
+        RunModuleHook("OnProfileChanged", settings)
+    end
+end
+
+local function OnAddonLoaded()
+    _G.PreydatorDB = _G.PreydatorDB or {}
+    local profileSystem = Preydator and Preydator.ProfileSystem
+    if profileSystem and type(profileSystem.EnsureProfiles) == "function" then
+        profileSystem:EnsureProfiles()
+        if type(profileSystem.GetActiveProfileTable) == "function" then
+            settings = profileSystem:GetActiveProfileTable()
+        end
+    end
+    if type(settings) ~= "table" then
+        settings = _G.PreydatorDB
+    end
+
+    Preydator:ApplyRuntimeSettings(settings, false, false)
+    AddDebugLog("OnAddonLoaded", "debug=" .. tostring(debugDB.enabled) .. " | stage" .. tostring(MAX_STAGE) .. "=" .. tostring(settings.stageSounds[MAX_STAGE]), true)
+
+    state.pollingActive = false
 
     frame:RegisterEvent("PLAYER_LOGIN")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -5372,6 +5485,7 @@ EnsureOptionsPanel = function()
     local lockCheckbox = AddCheckbox(panel, "Lock Bar", 20, -55, function() return settings.locked end, function(value)
         settings.locked = value
         ApplyBarSettings()
+        UpdateBarDisplay()
     end)
 
     local onlyShowInPreyZoneCheckbox = AddCheckbox(panel, "Only show in prey zone", 20, -83, function() return settings.onlyShowInPreyZone end, function(value)
@@ -5926,6 +6040,9 @@ Preydator.API = {
         ApplyBarSettings()
         UpdateBarDisplay()
     end,
+    ApplyRuntimeSettings = function(nextSettings, emitProfileHook, refreshUi)
+        Preydator:ApplyRuntimeSettings(nextSettings, emitProfileHook == true, refreshUi == true)
+    end,
     ResetBarPosition = function()
         barPositionUtil.Reset()
     end,
@@ -6110,16 +6227,21 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         end
     end
 
-    -- Gate module fanout for noisy UI widget events when no prey context exists
+    -- Gate module fanout for noisy UI widget events when no prey context exists.
+    -- Keep this lazy so non-noisy events do not pay quest/cache costs.
     local isNoisyEvent = event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS"
-    local now = GetTime and GetTime() or 0
-    local livePreyQuestID = GetCurrentActivePreyQuestCached(isNoisyEvent and ACTIVE_PREY_QUEST_CACHE_SECONDS or 0)
-    local hasPreyContext = state.activeQuestID or (now < (state.killStageUntil or 0))
-    local outOfZoneQuestIdle = IsValidQuestID(state.activeQuestID)
-        and state.inPreyZone ~= true
-        and not (now < (state.killStageUntil or 0))
-        and not (now < (state.ambushAlertUntil or 0))
-    if not (isNoisyEvent and (not hasPreyContext or outOfZoneQuestIdle)) then
+    local now
+    if isNoisyEvent then
+        now = GetTime and GetTime() or 0
+        local hasPreyContext = state.activeQuestID or (now < (state.killStageUntil or 0))
+        local outOfZoneQuestIdle = IsValidQuestID(state.activeQuestID)
+            and state.inPreyZone ~= true
+            and not (now < (state.killStageUntil or 0))
+            and not (now < (state.ambushAlertUntil or 0))
+        if hasPreyContext and not outOfZoneQuestIdle then
+            RunModuleHook("OnEvent", event, arg1, arg2)
+        end
+    else
         RunModuleHook("OnEvent", event, arg1, arg2)
     end
 
@@ -6134,6 +6256,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
             ApplyBarSettings()
             UpdateBarDisplay()
         end
+        Preydator:SetPollingActive(Preydator:ShouldUseActivePolling())
         return
     end
 
@@ -6153,7 +6276,11 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         state.progressState = PREY_PROGRESS_FINAL
         state.progressPercent = 100
         UpdateBarDisplay()
+        Preydator:SetPollingActive(true)
     end
+
+    now = now or (GetTime and GetTime() or 0)
+    local livePreyQuestID = GetCurrentActivePreyQuestCached(isNoisyEvent and ACTIVE_PREY_QUEST_CACHE_SECONDS or 0)
 
     if not (((state.killStageUntil or 0) > now)
         or ((state.ambushAlertUntil or 0) > now)
@@ -6172,27 +6299,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
     end
 
     UpdatePreyState()
-end)
-
-frame:SetScript("OnUpdate", function(_, elapsed)
-    local now = GetTime and GetTime() or 0
-    local livePreyQuestID = GetCurrentActivePreyQuestCached(ACTIVE_PREY_QUEST_CACHE_SECONDS)
-    if not (((state.killStageUntil or 0) > now)
-        or ((state.ambushAlertUntil or 0) > now)
-        or ((state.questListenUntil or 0) > now)
-        or IsValidQuestID(state.activeQuestID)
-        or IsValidQuestID(livePreyQuestID)) then
-        state.elapsedSinceUpdate = 0
-        return
-    end
-
-    state.elapsedSinceUpdate = (state.elapsedSinceUpdate or 0) + (elapsed or 0)
-    if state.elapsedSinceUpdate < UPDATE_INTERVAL_SECONDS then
-        return
-    end
-
-    state.elapsedSinceUpdate = 0
-    UpdatePreyState()
+    Preydator:SetPollingActive(Preydator:ShouldUseActivePolling())
 end)
 
 frame:RegisterEvent("ADDON_LOADED")

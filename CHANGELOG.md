@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.5 - 2026-03-21
+
+### Performance
+- Ported core prey polling to V2-style stage gating: `OnUpdate` is now enabled only while hot prey context exists (quest bootstrap, kill-carry window, ambush alert window, quest-listen burst, edit-mode preview, force-show, or active in-zone prey tracking) and is detached when idle.
+- Reduced idle event overhead by making noisy prey-context checks lazy in `Preydator.lua` so non-widget events do not perform unnecessary quest-cache/time probes.
+- Reduced Hunt Table event overhead by memoizing per-event hunt-context evaluation in `HuntScanner` so expensive context checks are only computed when a branch needs them.
+
+### Fixed
+- Fixed Warband totals row changing when collapsing a realm group. Grand totals now always sum from the filtered character source rows (all shown characters) rather than from post-collapse display rows, so collapse/expand only affects visibility and not totals.
+- Fixed Lock/Unlock Bar behavior so toggling lock state from settings immediately refreshes bar interaction state (mouse/drag) without waiting for a later display update.
+- Fixed Profiles tab actions by wiring a full profile runtime API (switch/create/delete/reset/copy) to live settings state.
+
+### Changed
+- Moved profile management out of `Preydator.lua` monolith into dedicated module `Modules/ProfileManager.lua`, and wired profile loading at addon startup through the new profile system.
+- Simplified Profiles page settings logic to rely on module-backed profile APIs directly (removed legacy unavailable-API fallback scaffolding).
+
 ## 2.0.4 - 2026-03-20
 
 ### Fixed
