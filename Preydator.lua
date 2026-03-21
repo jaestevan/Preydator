@@ -5052,6 +5052,19 @@ local function UpdatePreyState()
 end
 
 function Preydator:ShouldUseActivePolling()
+    local customizationV2 = Preydator:GetModule("CustomizationStateV2")
+    local barModuleEnabled = true
+    local soundsModuleEnabled = true
+    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        barModuleEnabled = customizationV2:IsModuleEnabled("bar") == true
+        soundsModuleEnabled = customizationV2:IsModuleEnabled("sounds") == true
+    end
+
+    local soundsRuntimeEnabled = soundsModuleEnabled and settings and settings.soundsEnabled ~= false
+    if not barModuleEnabled and not soundsRuntimeEnabled then
+        return false
+    end
+
     local now = GetTime and GetTime() or 0
     local trackedQuestID = state and state.activeQuestID or nil
     local hasTrackedQuest = IsValidQuestID(trackedQuestID) and IsQuestStillActive(trackedQuestID)
@@ -5077,6 +5090,16 @@ end
 function Preydator:SetPollingActive(enabled)
     if not frame then
         return
+    end
+
+    local customizationV2 = Preydator:GetModule("CustomizationStateV2")
+    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        local barModuleEnabled = customizationV2:IsModuleEnabled("bar") == true
+        local soundsModuleEnabled = customizationV2:IsModuleEnabled("sounds") == true
+        local soundsRuntimeEnabled = soundsModuleEnabled and settings and settings.soundsEnabled ~= false
+        if not barModuleEnabled and not soundsRuntimeEnabled then
+            enabled = false
+        end
     end
 
     local shouldEnable = enabled == true

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.6 - 2026-03-21
+
+### Fixed
+- Fixed Hunt Table module disable wiring so HuntScanner now honors module state at runtime. When the Hunt module is disabled, HuntScanner now hard-stops noisy event subscriptions, snapshot queueing, refresh/cache passes, and panel rendering instead of continuing to process hunt events through the separate scanner event frame.
+- Fixed Bar/Sounds independence in active polling gates. Core polling now remains available for sound-driven prey stage updates when Sounds is enabled, even if Bar is disabled; polling is forced off only when both Bar and sound runtime are disabled.
+
 ## 2.0.5 - 2026-03-21
 
 ### Performance

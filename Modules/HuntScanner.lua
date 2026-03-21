@@ -104,6 +104,7 @@ local noisyEventsRegistered = false
 local IsMissionFrameVisible
 local IsOptionsPreviewVisible
 local HasActivePreyQuest
+local IsHuntRuntimeEnabled
 
 local function SetNoisyEventSubscriptions(enabled)
     if not huntEventFrame then
@@ -128,6 +129,11 @@ local function SetNoisyEventSubscriptions(enabled)
 end
 
 local function SyncNoisyEventSubscriptions()
+    if not IsHuntRuntimeEnabled() then
+        SetNoisyEventSubscriptions(false)
+        return
+    end
+
     if IsInRestrictedInstance() and not IsOptionsPreviewVisible() then
         SetNoisyEventSubscriptions(false)
         return
@@ -360,6 +366,27 @@ GetSettings = function()
         return nil
     end
     return api.GetSettings()
+end
+
+local function IsHuntModuleEnabled()
+    local customizationV2 = Preydator and Preydator.GetModule and Preydator:GetModule("CustomizationStateV2")
+    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        return customizationV2:IsModuleEnabled("hunt") == true
+    end
+    return true
+end
+
+IsHuntRuntimeEnabled = function()
+    if not IsHuntModuleEnabled() then
+        return false
+    end
+
+    local settings = GetSettings()
+    if not settings then
+        return false
+    end
+
+    return settings.huntScannerEnabled ~= false
 end
 
 local function EnsureSettings()
@@ -2703,8 +2730,7 @@ HandleInteractionSnapshot = function()
         EnsureSettings()
         ProcessRewardCacheLifecycle()
 
-        local settings = GetSettings()
-        if not settings or settings.huntScannerEnabled == false then
+        if not IsHuntRuntimeEnabled() then
             HidePanel(false)
             return
         end
@@ -2934,6 +2960,11 @@ function HuntScannerModule:OnSlashCommand(text, rest)
 end
 
 QueueInteractionSnapshotPasses = function(force)
+    if not IsHuntRuntimeEnabled() then
+        HidePanel()
+        return
+    end
+
     if IsInRestrictedInstance() then
         HidePanel()
         return
@@ -2981,6 +3012,11 @@ QueueInteractionSnapshotPasses = function(force)
 end
 
 function HuntScannerModule:RefreshNow()
+    if not IsHuntRuntimeEnabled() then
+        HidePanel()
+        return
+    end
+
     ProcessRewardCacheLifecycle()
     if IsOptionsPreviewVisible() then
         RenderPanel(BuildPreviewRows())
@@ -2990,6 +3026,11 @@ function HuntScannerModule:RefreshNow()
 end
 
 function HuntScannerModule:RefreshRewardCache()
+    if not IsHuntRuntimeEnabled() then
+        HidePanel()
+        return
+    end
+
     ClearAllRewardCaches()
     if IsOptionsPreviewVisible() then
         RenderPanel(BuildPreviewRows())
@@ -3149,13 +3190,24 @@ huntEventFrame:RegisterEvent("QUEST_FINISHED")
 huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     local noisyEvent = (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS")
     local isRestrictedInstance = IsInRestrictedInstance()
+    local runtimeEnabled = nil
+    local function IsRuntimeEnabled()
+        if runtimeEnabled ~= nil then
+            return runtimeEnabled
+        end
+
+        runtimeEnabled = IsHuntRuntimeEnabled()
+        return runtimeEnabled
+    end
+
     local hasHuntContext = nil
     local function GetHasHuntContext()
         if hasHuntContext ~= nil then
             return hasHuntContext
         end
 
-        hasHuntContext = (not isRestrictedInstance)
+        hasHuntContext = IsRuntimeEnabled()
+            and (not isRestrictedInstance)
             and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or HasActivePreyQuest())
         return hasHuntContext
     end
@@ -3170,6 +3222,14 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         ProcessRewardCacheLifecycle()
         ApplyMissionHooks()
         SyncNoisyEventSubscriptions()
+        return
+    end
+
+    if not IsRuntimeEnabled() then
+        if huntInteractionActive then
+            huntInteractionActive = false
+        end
+        HidePanel()
         return
     end
 
