@@ -4,7 +4,7 @@
 ## Author: RagingAltoholic
 ## Category-enUS: Quests
 ## Category-zhCN: 任务
-## Version: 2.0.3
+## Version: 2.0.4
 ## AddonCompartmentFunc: Preydator_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: Preydator_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: Preydator_OnAddonCompartmentLeave

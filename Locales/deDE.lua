@@ -13,3 +13,10 @@ local L = _G.PreydatorL
 -- L["Blood in the Shadows"]      = "Blut im Schatten"
 -- L["Echoes of the Kill"]        = "Echos des Todes"
 -- L["Feast of the Fang"]         = "Fest des Fangzahns"
+
+-- Difficulty names — used to identify difficulty from adventure-map pin descriptions.
+-- These must match the substrings that appear in the WoW DE-client pin text.
+-- deDE confirmed by user report (gz2k2, GitHub issue #10).
+L["Normal"]    = "Normal"
+L["Hard"]      = "Schwer"
+L["Nightmare"] = "Alptraum"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.4 - 2026-03-20
+
+### Fixed
+- Fixed `attempt to compare a secret number value (tainted by 'Preydator')` crash in `LayoutFrame.lua` triggered when hovering AreaPOI tooltips on the world map while a prey quest was active. Root cause: `C_UIWidgetManager.GetAllWidgetsBySetID()` was called with secret-number set IDs returned by `GetTopCenterWidgetSetID()`, `GetObjectiveTrackerWidgetSetID()`, etc., tainting the returned widget table fields (`widgetType`, `widgetID`). Those tainted values then propagated into Blizzard's `DefaultWidgetLayout` comparison in `LayoutFrame.lua`. Fixed by wrapping all three `GetAllWidgetsBySetID` call sites and `widget.widgetType`/`widget.widgetID` field reads in `pcall`, and coercing `widgetID` through `tonumber()` before passing it back to any Blizzard API.
+- Fixed locale difficulty detection in Hunt Table parsing so non-English clients no longer collapse hunts into Normal. `ParseDifficulty` now checks localized difficulty strings (`L["Normal"]`, `L["Hard"]`, `L["Nightmare"]`) in addition to English substrings while still returning canonical internal keys (`normal`/`hard`/`nightmare`) for stable sorting and caching. Added locale entries across non-enUS files (with AI-translation notes for native-speaker verification) and confirmed deDE mappings (`Schwer`, `Alptraum`). (Credit: gz2k2)
+
 ## 2.0.3 - 2026-03-20
 
 ### Changed

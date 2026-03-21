@@ -10,3 +10,10 @@ local L = _G.PreydatorL
 -- L["Blood in the Shadows"]      = ""
 -- L["Echoes of the Kill"]        = ""
 -- L["Feast of the Fang"]         = ""
+
+-- Difficulty names — used to identify difficulty from adventure-map pin descriptions.
+-- AI-TRANSLATED: These values have not been verified against live WoW zhTW client text.
+-- A native speaker should confirm these match what the game actually shows in pin descriptions.
+L["Normal"]    = "普通"
+L["Hard"]      = "困難"
+L["Nightmare"] = "夢魘"

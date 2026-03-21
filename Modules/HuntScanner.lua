@@ -1160,12 +1160,16 @@ local function ParseDifficulty(description)
         return DIFFICULTY_NORMAL
     end
 
-    if SafeFindLiteral(description, "Nightmare") then
+    if SafeFindLiteral(description, "Nightmare") or SafeFindLiteral(description, L["Nightmare"]) then
         return DIFFICULTY_NIGHTMARE
     end
 
-    if SafeFindLiteral(description, "Hard") then
+    if SafeFindLiteral(description, "Hard") or SafeFindLiteral(description, L["Hard"]) then
         return DIFFICULTY_HARD
+    end
+
+    if SafeFindLiteral(description, "Normal") or SafeFindLiteral(description, L["Normal"]) then
+        return DIFFICULTY_NORMAL
     end
 
     return DIFFICULTY_NORMAL

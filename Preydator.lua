@@ -3917,24 +3917,30 @@ ApplyDefaultPreyIconVisibility = function()
     end
 
     for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-        local widgets = C_UIWidgetManager.GetAllWidgetsBySetID(setID)
-        if widgets then
+        local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
+        if not okWidgets or type(widgets) ~= "table" then
+            okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
+        end
+        if type(widgets) == "table" then
             for _, widget in ipairs(widgets) do
-                if widget and widget.widgetType == preyWidgetType and widget.widgetID then
+                local okType, widgetType = pcall(function() return widget and widget.widgetType end)
+                local okID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
+                local numericWidgetID = okID and tonumber(rawWidgetID) or nil
+                if okType and widgetType == preyWidgetType and numericWidgetID then
                     for _, globalName in ipairs(containerGlobals) do
                         local container = _G[globalName]
-                        local widgetFrame = TryGetWidgetFrameByID(container, widget.widgetID)
+                        local widgetFrame = TryGetWidgetFrameByID(container, numericWidgetID)
                         AttachStageFourMapClick(widgetFrame)
                         EnsureWidgetSuppressionHook(widgetFrame)
                         ApplyWidgetFrameSuppression(widgetFrame, suppressEncounter)
                         ApplySuppressionToImmediateWidgetParent(widgetFrame, container, suppressEncounter)
 
-                        local namedFrame = _G[globalName .. "Widget" .. tostring(widget.widgetID)]
+                        local namedFrame = _G[globalName .. "Widget" .. tostring(numericWidgetID)]
                         AttachStageFourMapClick(namedFrame)
                         EnsureWidgetSuppressionHook(namedFrame)
                         ApplyWidgetFrameSuppression(namedFrame, suppressEncounter)
                         ApplySuppressionToImmediateWidgetParent(namedFrame, container, suppressEncounter)
-                        ApplySuppressionToContainerFallback(container, widget.widgetID)
+                        ApplySuppressionToContainerFallback(container, numericWidgetID)
                     end
                 end
             end
@@ -4653,12 +4659,18 @@ local function PrintInspectState(outputMode)
 
     if C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID and C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo then
         for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-            local widgets = C_UIWidgetManager.GetAllWidgetsBySetID(setID)
-            if widgets and #widgets > 0 then
+            local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
+            if not okWidgets or type(widgets) ~= "table" then
+                okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
+            end
+            if type(widgets) == "table" and #widgets > 0 then
                 for _, widget in ipairs(widgets) do
-                    if widget and widget.widgetType == preyWidgetType then
-                        local info = C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo(widget.widgetID)
-                        if info and info.shownState == shownStateShown then
+                    local okType, widgetType = pcall(function() return widget and widget.widgetType end)
+                    local okRawID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
+                    local numericWidgetID = okRawID and tonumber(rawWidgetID) or nil
+                    if okType and widgetType == preyWidgetType and numericWidgetID then
+                        local okInfo, info = pcall(C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo, numericWidgetID)
+                        if okInfo and info and info.shownState == shownStateShown then
                             shownWidgets = shownWidgets + 1
                             local pct = ExtractProgressPercent(info, info.tooltip)
                             local widgetQuestID = ExtractWidgetQuestID(info)
@@ -4671,7 +4683,7 @@ local function PrintInspectState(outputMode)
                                 "UIWidgetPowerBarContainerFrameWidget",
                             }
                             for _, prefix in ipairs(framePrefixes) do
-                                local frameName = prefix .. tostring(widget.widgetID)
+                                local frameName = prefix .. tostring(numericWidgetID)
                                 local frameRef = _G[frameName]
                                 if frameRef then
                                     frameStateParts[#frameStateParts + 1] = frameName
@@ -4692,7 +4704,7 @@ local function PrintInspectState(outputMode)
                             }
                             for _, containerName in ipairs(containerNames) do
                                 local container = _G[containerName]
-                                local resolvedFrame = TryGetWidgetFrameByID(container, widget.widgetID)
+                                local resolvedFrame = TryGetWidgetFrameByID(container, numericWidgetID)
                                 if resolvedFrame then
                                     local resolvedName = resolvedFrame.GetName and resolvedFrame:GetName() or "<unnamed>"
                                     local parentName = "<nil>"
@@ -4709,7 +4721,7 @@ local function PrintInspectState(outputMode)
                                         .. ",parent=" .. tostring(parentName)
                                 end
                             end
-                            add("  widget set=" .. tostring(setID) .. " widgetID=" .. tostring(widget.widgetID)
+                            add("  widget set=" .. tostring(setID) .. " widgetID=" .. tostring(numericWidgetID)
                                 .. " questID=" .. tostring(widgetQuestID)
                                 .. " state=" .. tostring(info.progressState)
                                 .. " pct=" .. tostring(pct)
@@ -4724,18 +4736,18 @@ local function PrintInspectState(outputMode)
                                 add("    resolvedContainerFrames: none")
                             end
 
-                            local firstPrefix = "UIWidgetTopCenterContainerFrameWidget" .. tostring(widget.widgetID)
+                            local firstPrefix = "UIWidgetTopCenterContainerFrameWidget" .. tostring(numericWidgetID)
                             local firstFrameRef = _G[firstPrefix]
                             if not firstFrameRef then
-                                firstPrefix = "UIWidgetObjectiveTrackerContainerFrameWidget" .. tostring(widget.widgetID)
+                                firstPrefix = "UIWidgetObjectiveTrackerContainerFrameWidget" .. tostring(numericWidgetID)
                                 firstFrameRef = _G[firstPrefix]
                             end
                             if not firstFrameRef then
-                                firstPrefix = "UIWidgetBelowMinimapContainerFrameWidget" .. tostring(widget.widgetID)
+                                firstPrefix = "UIWidgetBelowMinimapContainerFrameWidget" .. tostring(numericWidgetID)
                                 firstFrameRef = _G[firstPrefix]
                             end
                             if not firstFrameRef then
-                                firstPrefix = "UIWidgetPowerBarContainerFrameWidget" .. tostring(widget.widgetID)
+                                firstPrefix = "UIWidgetPowerBarContainerFrameWidget" .. tostring(numericWidgetID)
                                 firstFrameRef = _G[firstPrefix]
                             end
 
@@ -4754,7 +4766,7 @@ local function PrintInspectState(outputMode)
                                 end
                             end
 
-                            local globalMatches = FindGlobalFramesForWidgetID(widget.widgetID, true)
+                            local globalMatches = FindGlobalFramesForWidgetID(numericWidgetID, true)
                             if #globalMatches > 0 then
                                 local maxPrint = math.min(#globalMatches, 10)
                                 add("    globalWidgetFrames=" .. tostring(#globalMatches) .. " (showing " .. tostring(maxPrint) .. ")")
@@ -4832,12 +4844,18 @@ local function FindPreyWidgetProgressState(activeQuestID)
     local fallbackState, fallbackTooltip, fallbackPct = nil, nil, nil
 
     for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-        local widgets = C_UIWidgetManager.GetAllWidgetsBySetID(setID)
-        if widgets then
+        local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
+        if not okWidgets or type(widgets) ~= "table" then
+            okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
+        end
+        if type(widgets) == "table" then
             for _, widget in ipairs(widgets) do
-                if widget and widget.widgetType == preyWidgetType then
-                    local info = C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo(widget.widgetID)
-                    if info and info.shownState == shownStateShown then
+                local okType, widgetType = pcall(function() return widget and widget.widgetType end)
+                local okID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
+                local numericWidgetID = okID and tonumber(rawWidgetID) or nil
+                if okType and widgetType == preyWidgetType and numericWidgetID then
+                    local okInfo, info = pcall(C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo, numericWidgetID)
+                    if okInfo and info and info.shownState == shownStateShown then
                         local pct = ExtractProgressPercent(info, info.tooltip)
                         if IsValidQuestID(activeQuestID) then
                             local widgetQuestID = ExtractWidgetQuestID(info)
