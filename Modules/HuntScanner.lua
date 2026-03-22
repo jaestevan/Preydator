@@ -357,7 +357,13 @@ end
 
 local function GetThemeFontPath(theme)
     local fontKey = theme and theme.fontKey
-    return FONT_PATHS[fontKey] or FONT_PATHS.frizqt
+    local path = FONT_PATHS[fontKey] or FONT_PATHS.frizqt
+    if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+        and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+    then
+        return _G.STANDARD_TEXT_FONT
+    end
+    return path
 end
 
 GetSettings = function()
@@ -1398,7 +1404,7 @@ local function RefreshHuntsFromPins()
     local nextHunts = {}
     local seenQuestIDs = {}
     local previousCount = #liveHunts
-    local adventureMapID = GetAdventureMapID()
+    local adventureMapID = SafeToNumber(GetAdventureMapID())
     if adventureMapID then
         cachedAdventureMapID = adventureMapID
     end
@@ -1416,8 +1422,9 @@ local function RefreshHuntsFromPins()
             local zoneMapID = nil
             if (adventureMapID or cachedAdventureMapID) and C_Map and C_Map.GetMapInfoAtPosition then
                 local mapForLookup = adventureMapID or cachedAdventureMapID
-                local zoneInfo = C_Map.GetMapInfoAtPosition(mapForLookup, nx or 0, ny or 0)
-                zoneMapID = zoneInfo and zoneInfo.mapID
+                local okZoneInfo, zoneInfo = pcall(C_Map.GetMapInfoAtPosition, mapForLookup, nx or 0, ny or 0)
+                zoneInfo = okZoneInfo and zoneInfo or nil
+                zoneMapID = SafeToNumber(zoneInfo and zoneInfo.mapID)
             end
             if zoneMapID then
                 questZoneCache[questID] = zoneMapID
@@ -3132,10 +3139,11 @@ function HuntScannerModule:GetQuestZoneMapID(questID)
     end
     -- If we have cached pin coordinates and a parent map ID, resolve zone on demand.
     local coords = questCoords[id]
-    local parentMapID = cachedAdventureMapID
+    local parentMapID = SafeToNumber(cachedAdventureMapID)
     if coords and parentMapID and C_Map and C_Map.GetMapInfoAtPosition then
-        local zoneInfo = C_Map.GetMapInfoAtPosition(parentMapID, coords.nx, coords.ny)
-        local zoneMapID = zoneInfo and zoneInfo.mapID
+        local okZoneInfo, zoneInfo = pcall(C_Map.GetMapInfoAtPosition, parentMapID, coords.nx, coords.ny)
+        zoneInfo = okZoneInfo and zoneInfo or nil
+        local zoneMapID = SafeToNumber(zoneInfo and zoneInfo.mapID)
         if zoneMapID then
             questZoneCache[id] = zoneMapID
             return zoneMapID

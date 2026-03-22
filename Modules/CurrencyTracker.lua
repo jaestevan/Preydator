@@ -1189,7 +1189,13 @@ end
 
 local function GetThemeFontPath(theme)
     local fontKey = theme and theme.fontKey
-    return FONT_PATHS[fontKey] or FONT_PATHS.frizqt
+    local path = FONT_PATHS[fontKey] or FONT_PATHS.frizqt
+    if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+        and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+    then
+        return _G.STANDARD_TEXT_FONT
+    end
+    return path
 end
 
 local function GetThemePreset()
@@ -2440,6 +2446,15 @@ local function EnsureWarbandRows(minCount)
         for _, headerData in ipairs(warbandColumns) do
             local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             cell:SetJustifyH((headerData.key == "character" or headerData.key == "realm") and "LEFT" or "RIGHT")
+            if cell.SetWordWrap then
+                cell:SetWordWrap(false)
+            end
+            if cell.SetNonSpaceWrap then
+                cell:SetNonSpaceWrap(false)
+            end
+            if cell.SetMaxLines then
+                cell:SetMaxLines(1)
+            end
             cells[headerData.key] = cell
         end
 
@@ -2471,9 +2486,10 @@ local function ApplyWarbandColumnLayout(showRealm, displayRowCount)
 
     local rowCount = math.max(1, tonumber(displayRowCount) or 0)
 
-    local realmWidth = showRealm and 96 or 0
-    local charWidth = showRealm and 108 or 124
-    local maxCharWidth = showRealm and 132 or 148
+    local realmWidth = showRealm and 128 or 0
+    local charWidth = showRealm and 76 or 124
+    local maxCharWidth = showRealm and 112 or 148
+    local maxRealmWidth = showRealm and 188 or 0
     local currencyDefaults = {}
     for _, entry in ipairs(CURRENCY_ALLOW_LIST) do
         currencyDefaults[entry.id] = 52
@@ -2510,9 +2526,16 @@ local function ApplyWarbandColumnLayout(showRealm, displayRowCount)
         currencyWidth = currencyWidth + (currencyDefaults[currencyID] or 48)
     end
 
-    local charSlack = tableWidth - realmWidth - preyWidth - currencyWidth - charWidth
-    if charSlack > 0 then
-        charWidth = math.min(maxCharWidth, charWidth + charSlack)
+    local widthSlack = tableWidth - realmWidth - preyWidth - currencyWidth - charWidth
+    if widthSlack > 0 then
+        local realmGrow = math.min(maxRealmWidth - realmWidth, widthSlack)
+        if realmGrow > 0 then
+            realmWidth = realmWidth + realmGrow
+            widthSlack = widthSlack - realmGrow
+        end
+        if widthSlack > 0 then
+            charWidth = math.min(maxCharWidth, charWidth + widthSlack)
+        end
     end
 
     local currencyWidths = {}
@@ -2980,7 +3003,7 @@ local function RefreshWarbandWindowDisplay()
                 local collapsed = data.collapsed == true
                 local prefix = collapsed and "+ " or "- "
                 rowData.cells.realm:SetText(prefix .. data.realm)
-                rowData.cells.character:SetText(L["Subtotal"])
+                rowData.cells.character:SetText("")
                 rowData.cells.prey:SetText("")
                 for _, e in ipairs(CURRENCY_ALLOW_LIST) do
                     if rowData.cells[e.id] then

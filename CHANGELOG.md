@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.8 - 2026-03-22
+
+### Fixed
+- Fixed non-Latin glyph rendering on `ruRU`/`koKR`/`zhCN`/`zhTW` by forcing locale-safe font fallback (`STANDARD_TEXT_FONT`) for bar labels, Currency/Warband windows, and Hunt panel text when selected decorative fonts lack required character support.
+
+## 2.0.7 - 2026-03-22
+
+### Fixed
+- Restored addon version metadata in debug inspect module headers. `/pd inspect` and `/pd inspectquest` now include `addon=x.y.z` in their first line again.
+- Fixed Warband panel realm-row overlap when collapsing realms with long names (including spaces/hyphens) by forcing single-line row-cell text in the table layout.
+- Removed `Subtotal` text from grouped realm rows in Warband and rebalanced table column sizing to prioritize the realm-name column so more full realm names stay visible.
+- Hardened default prey-icon widget suppression against Blizzard tooltip/widget taint by narrowing suppression scope to direct prey widget frames and safeguarding widget-set ID reads.
+- Hardened core world-map value handling to fail closed on protected/tainted API payloads (map IDs, map info, quest-map positions, and waypoint creation), preventing unsafe values from propagating into Blizzard map/widget paths.
+- Extended fail-closed map/world-quest guards into `DebugInspect` and `HuntScanner` (protected `GetBestMapForUnit`, `GetMapInfo`, `GetQuestZoneID`, and `GetMapInfoAtPosition` reads) so secret-number payloads are safely ignored instead of cascading into Blizzard widget/layout code.
+- Finalized a defensive quest-inspect pass by guarding remaining quest-log detail reads (`IsOnQuest`, `IsQuestFlaggedCompleted`, `GetInfo`, `GetQuestTagInfo`, `GetQuestObjectives`) with protected calls to prevent secret values from tripping inspect/report formatting.
+
 ## 2.0.6 - 2026-03-21
 
 ### Fixed

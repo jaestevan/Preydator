@@ -8,11 +8,22 @@ end
 local C_QuestLog = _G.C_QuestLog
 local C_Map = _G.C_Map
 local C_TaskQuest = _G.C_TaskQuest
+local C_AddOns = _G.C_AddOns
 local IsInInstance = _G.IsInInstance
 local geterrorhandler = _G.geterrorhandler
 local GetTime = _G.GetTime
 local GetZoneText = _G.GetZoneText
 local GetQuestLink = _G.GetQuestLink
+
+local function GetAddonVersionSafe()
+    if C_AddOns and type(C_AddOns.GetAddOnMetadata) == "function" then
+        local ok, version = pcall(C_AddOns.GetAddOnMetadata, "Preydator", "Version")
+        if ok and type(version) == "string" and version ~= "" then
+            return version
+        end
+    end
+    return "?"
+end
 
 local function SafeToNumber(value)
     local ok, converted = pcall(tonumber, value)
@@ -85,15 +96,24 @@ local function BuildQuestInspectReport(requestedQuestID)
     end
 
     local state = (type(Preydator.GetState) == "function") and Preydator.GetState() or {}
-    local liveQuestID = (C_QuestLog and C_QuestLog.GetActivePreyQuest) and SafeToNumber(C_QuestLog.GetActivePreyQuest()) or nil
+    local liveQuestID = nil
+    if C_QuestLog and type(C_QuestLog.GetActivePreyQuest) == "function" then
+        local okLiveQuestID, rawLiveQuestID = pcall(C_QuestLog.GetActivePreyQuest)
+        liveQuestID = okLiveQuestID and SafeToNumber(rawLiveQuestID) or nil
+    end
     local questID = SafeToNumber(requestedQuestID) or liveQuestID or SafeToNumber(state.activeQuestID)
 
     local now = GetTime and GetTime() or 0
-    local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
+    local playerMapID = nil
+    if C_Map and type(C_Map.GetBestMapForUnit) == "function" then
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        playerMapID = okPlayerMapID and SafeToNumber(rawPlayerMapID) or nil
+    end
     local playerMapName = nil
     local playerMapType = nil
-    if playerMapID and C_Map and C_Map.GetMapInfo then
-        local mapInfo = C_Map.GetMapInfo(playerMapID)
+    if playerMapID and C_Map and type(C_Map.GetMapInfo) == "function" then
+        local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
+        mapInfo = okMapInfo and mapInfo or nil
         playerMapName = mapInfo and mapInfo.name or nil
         playerMapType = mapInfo and mapInfo.mapType or nil
     end
@@ -108,7 +128,7 @@ local function BuildQuestInspectReport(requestedQuestID)
         end
     end
 
-    add("Preydator Quest Inspect (module)")
+    add("Preydator Quest Inspect (module) | addon=" .. GetAddonVersionSafe())
     add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. SafeValue(playerMapID) .. " | playerMap=" .. SafeValue(playerMapName))
     add("- requestedQuestID=" .. SafeValue(requestedQuestID) .. " | livePreyQuestID=" .. SafeValue(liveQuestID) .. " | trackedQuestID=" .. SafeValue(state.activeQuestID) .. " | inspectQuestID=" .. SafeValue(questID))
 
@@ -141,12 +161,14 @@ local function BuildQuestInspectReport(requestedQuestID)
 
     local questZoneMapID = nil
     if C_TaskQuest and type(C_TaskQuest.GetQuestZoneID) == "function" then
-        questZoneMapID = C_TaskQuest.GetQuestZoneID(questID)
+        local okQuestZoneMapID, rawQuestZoneMapID = pcall(C_TaskQuest.GetQuestZoneID, questID)
+        questZoneMapID = okQuestZoneMapID and SafeToNumber(rawQuestZoneMapID) or nil
     end
 
     local questZoneName = nil
     if questZoneMapID and C_Map and type(C_Map.GetMapInfo) == "function" then
-        local zoneInfo = C_Map.GetMapInfo(questZoneMapID)
+        local okZoneInfo, zoneInfo = pcall(C_Map.GetMapInfo, questZoneMapID)
+        zoneInfo = okZoneInfo and zoneInfo or nil
         questZoneName = zoneInfo and zoneInfo.name or nil
     end
 
@@ -155,27 +177,32 @@ local function BuildQuestInspectReport(requestedQuestID)
 
     if C_QuestLog then
         if type(C_QuestLog.IsOnQuest) == "function" then
-            add("- flags | isOnQuest=" .. SafeValue(C_QuestLog.IsOnQuest(questID)))
+            local okIsOnQuest, isOnQuest = pcall(C_QuestLog.IsOnQuest, questID)
+            add("- flags | isOnQuest=" .. SafeValue(okIsOnQuest and isOnQuest or nil))
         end
         if type(C_QuestLog.IsQuestFlaggedCompleted) == "function" then
-            add("- flags | isFlaggedCompleted=" .. SafeValue(C_QuestLog.IsQuestFlaggedCompleted(questID)))
+            local okIsCompleted, isCompleted = pcall(C_QuestLog.IsQuestFlaggedCompleted, questID)
+            add("- flags | isFlaggedCompleted=" .. SafeValue(okIsCompleted and isCompleted or nil))
         end
     end
 
     if logIndex and C_QuestLog and type(C_QuestLog.GetInfo) == "function" then
-        local info = C_QuestLog.GetInfo(logIndex)
+        local okInfo, info = pcall(C_QuestLog.GetInfo, logIndex)
+        info = okInfo and info or nil
         add("- GetInfo(" .. tostring(logIndex) .. ")=" .. FormatTablePairs(info))
     else
         add("- GetInfo unavailable: no logIndex")
     end
 
     if C_QuestLog and type(C_QuestLog.GetQuestTagInfo) == "function" then
-        local tagInfo = C_QuestLog.GetQuestTagInfo(questID)
+        local okTagInfo, tagInfo = pcall(C_QuestLog.GetQuestTagInfo, questID)
+        tagInfo = okTagInfo and tagInfo or nil
         add("- GetQuestTagInfo=" .. FormatTablePairs(tagInfo))
     end
 
     if C_QuestLog and type(C_QuestLog.GetQuestObjectives) == "function" then
-        local objectives = C_QuestLog.GetQuestObjectives(questID)
+        local okObjectives, objectives = pcall(C_QuestLog.GetQuestObjectives, questID)
+        objectives = okObjectives and objectives or nil
         if type(objectives) == "table" and #objectives > 0 then
             add("- objectives count=" .. tostring(#objectives))
             for idx, obj in ipairs(objectives) do
@@ -220,15 +247,24 @@ local function BuildInspectReport()
         return string.format("%s -> %s:%s (%s,%s)", tostring(point), tostring(relName), tostring(relativePoint), tostring(xOfs), tostring(yOfs))
     end
 
-    local liveQuestID = (C_QuestLog and C_QuestLog.GetActivePreyQuest) and C_QuestLog.GetActivePreyQuest() or nil
+    local liveQuestID = nil
+    if C_QuestLog and type(C_QuestLog.GetActivePreyQuest) == "function" then
+        local okLiveQuestID, rawLiveQuestID = pcall(C_QuestLog.GetActivePreyQuest)
+        liveQuestID = okLiveQuestID and SafeToNumber(rawLiveQuestID) or nil
+    end
     local hasActiveQuest = type(liveQuestID) == "number" and liveQuestID > 0
     local now = GetTime and GetTime() or 0
 
-    local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
+    local playerMapID = nil
+    if C_Map and type(C_Map.GetBestMapForUnit) == "function" then
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        playerMapID = okPlayerMapID and SafeToNumber(rawPlayerMapID) or nil
+    end
     local playerMapName = nil
     local playerMapType = nil
-    if playerMapID and C_Map and C_Map.GetMapInfo then
-        local mapInfo = C_Map.GetMapInfo(playerMapID)
+    if playerMapID and C_Map and type(C_Map.GetMapInfo) == "function" then
+        local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
+        mapInfo = okMapInfo and mapInfo or nil
         playerMapName = mapInfo and mapInfo.name or nil
         playerMapType = mapInfo and mapInfo.mapType or nil
     end
@@ -243,7 +279,7 @@ local function BuildInspectReport()
         end
     end
 
-    add("Preydator Inspect (module)")
+    add("Preydator Inspect (module) | addon=" .. GetAddonVersionSafe())
     add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. tostring(playerMapID) .. " | playerMap=" .. tostring(playerMapName))
     add("- instance inInstance=" .. tostring(inInstance) .. " | instanceType=" .. tostring(instanceType) .. " | playerMapType=" .. tostring(playerMapType))
     add("- quest live=" .. tostring(liveQuestID) .. " | hasActive=" .. tostring(hasActiveQuest) .. " | tracked=" .. tostring(state.activeQuestID))

@@ -1201,12 +1201,17 @@ local function GetPreyZoneInfo(questID)
         return nil, nil
     end
 
-    local mapID = C_TaskQuest.GetQuestZoneID(questID)
+    local okMapID, rawMapID = pcall(C_TaskQuest.GetQuestZoneID, questID)
+    local okNumericMapID, mapID = pcall(function()
+        return tonumber(rawMapID)
+    end)
+    mapID = (okMapID and okNumericMapID and mapID and mapID > 0) and mapID or nil
     if not mapID then
         return nil, nil
     end
 
-    local mapInfo = C_Map.GetMapInfo(mapID)
+    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, mapID)
+    mapInfo = okMapInfo and mapInfo or nil
     return (mapInfo and mapInfo.name or nil), mapID
 end
 
@@ -1220,7 +1225,11 @@ local function IsPlayerInPreyZone(preyMapID)
     end
 
     if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
-        local playerMapID = C_Map.GetBestMapForUnit("player")
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        local okNumericMapID, playerMapID = pcall(function()
+            return tonumber(rawPlayerMapID)
+        end)
+        playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
         state.playerMapID = playerMapID
         state.playerMapHierarchy = {}
         state.zoneCacheDirty = false
@@ -1230,12 +1239,17 @@ local function IsPlayerInPreyZone(preyMapID)
         while currentMapID and guard < 20 do
             state.playerMapHierarchy[currentMapID] = true
 
-            local mapInfo = C_Map.GetMapInfo(currentMapID)
-            if not mapInfo or not mapInfo.parentMapID then
+            local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, currentMapID)
+            mapInfo = okMapInfo and mapInfo or nil
+            local okParentMapID, parentMapID = pcall(function()
+                return tonumber(mapInfo and mapInfo.parentMapID)
+            end)
+            parentMapID = (okParentMapID and parentMapID and parentMapID > 0) and parentMapID or nil
+            if not parentMapID then
                 break
             end
 
-            currentMapID = mapInfo.parentMapID
+            currentMapID = parentMapID
             guard = guard + 1
         end
     end
@@ -1677,10 +1691,19 @@ local function IsRestrictedInstanceForPreyBar()
     -- Fallback: some Delve transitions can report inconsistent IsInInstance states
     -- while the player map is already a dungeon-type map.
     if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
-        local playerMapID = C_Map.GetBestMapForUnit("player")
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        local okNumericMapID, playerMapID = pcall(function()
+            return tonumber(rawPlayerMapID)
+        end)
+        playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
         if playerMapID then
-            local mapInfo = C_Map.GetMapInfo(playerMapID)
-            if mapInfo and tonumber(mapInfo.mapType) == 4 then
+            local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
+            mapInfo = okMapInfo and mapInfo or nil
+            local okMapType, mapType = pcall(function()
+                return tonumber(mapInfo and mapInfo.mapType)
+            end)
+            mapType = (okMapType and mapType and mapType > 0) and mapType or nil
+            if mapType == 4 then
                 return true
             end
         end
@@ -2091,6 +2114,11 @@ ApplyBarSettings = function()
     if UI.stageText then
         local _, _, flags = UI.stageText:GetFont()
         local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
+        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+        then
+            titleFont = _G.STANDARD_TEXT_FONT
+        end
         UI.stageText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
         local titleColor = settings.titleColor or DEFAULTS.titleColor
         UI.stageText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
@@ -2146,6 +2174,11 @@ ApplyBarSettings = function()
     if UI.stageSuffixText then
         local _, _, flags = UI.stageSuffixText:GetFont()
         local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
+        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+        then
+            titleFont = _G.STANDARD_TEXT_FONT
+        end
         UI.stageSuffixText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
         local titleColor = settings.titleColor or DEFAULTS.titleColor
         UI.stageSuffixText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
@@ -2170,6 +2203,11 @@ ApplyBarSettings = function()
     if UI.barText then
         local _, _, flags = UI.barText:GetFont()
         local percentFont = FONT_PRESETS[settings.percentFontKey] or FONT_PRESETS.frizqt
+        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+        then
+            percentFont = _G.STANDARD_TEXT_FONT
+        end
         UI.barText:SetFont(percentFont, math.max(8, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 1) * frameScale)), flags)
         local percentColor = settings.percentColor or DEFAULTS.percentColor
         UI.barText:SetTextColor(percentColor[1], percentColor[2], percentColor[3], percentColor[4] or 1)
@@ -2183,6 +2221,11 @@ ApplyBarSettings = function()
         if tickLabel then
             local _, _, flags = tickLabel:GetFont()
             local percentFont = FONT_PRESETS[settings.percentFontKey] or FONT_PRESETS.frizqt
+            if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
+                and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
+            then
+                percentFont = _G.STANDARD_TEXT_FONT
+            end
             tickLabel:SetFont(percentFont, math.max(7, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 4) * frameScale)), flags)
             local percentColor = settings.percentColor or DEFAULTS.percentColor
             tickLabel:SetTextColor(percentColor[1], percentColor[2], percentColor[3], 0.9)
@@ -3257,17 +3300,27 @@ local function GetCandidateWidgetSetIDs()
         UI.candidateWidgetSetIDs[index] = nil
     end
 
-    if C_UIWidgetManager and C_UIWidgetManager.GetTopCenterWidgetSetID then
-        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetTopCenterWidgetSetID()
+    local function appendWidgetSetID(getter)
+        if not getter then
+            return
+        end
+        local okSetID, rawSetID = pcall(getter)
+        if not okSetID then
+            return
+        end
+        local okNumericSetID, numericSetID = pcall(function()
+            return tonumber(rawSetID)
+        end)
+        if okNumericSetID and numericSetID and numericSetID > 0 then
+            UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = numericSetID
+        end
     end
-    if C_UIWidgetManager and C_UIWidgetManager.GetObjectiveTrackerWidgetSetID then
-        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetObjectiveTrackerWidgetSetID()
-    end
-    if C_UIWidgetManager and C_UIWidgetManager.GetBelowMinimapWidgetSetID then
-        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetBelowMinimapWidgetSetID()
-    end
-    if C_UIWidgetManager and C_UIWidgetManager.GetPowerBarWidgetSetID then
-        UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = C_UIWidgetManager.GetPowerBarWidgetSetID()
+
+    if C_UIWidgetManager then
+        appendWidgetSetID(C_UIWidgetManager.GetTopCenterWidgetSetID)
+        appendWidgetSetID(C_UIWidgetManager.GetObjectiveTrackerWidgetSetID)
+        appendWidgetSetID(C_UIWidgetManager.GetBelowMinimapWidgetSetID)
+        appendWidgetSetID(C_UIWidgetManager.GetPowerBarWidgetSetID)
     end
 
     return UI.candidateWidgetSetIDs
@@ -3309,181 +3362,26 @@ local function ApplyWidgetFrameSuppression(frameRef, suppress)
         return
     end
 
-    local visited = {}
-    local function shouldHardSuppress(target)
-        if not target then
-            return false
+    if suppress then
+        if frameRef.PreydatorWasShown == nil and frameRef.IsShown then
+            frameRef.PreydatorWasShown = frameRef:IsShown() and true or false
         end
-
-        local objectType = target.GetObjectType and target:GetObjectType() or nil
-        if objectType == "ModelScene" or objectType == "PlayerModel" or objectType == "Model" then
-            return true
+        if frameRef.Hide then
+            pcall(frameRef.Hide, frameRef)
         end
-
-        local name = target.GetName and target:GetName() or ""
-        local lowered = string.lower(tostring(name or ""))
-        return string.find(lowered, "modelscene", 1, true) ~= nil
-            or string.find(lowered, "scriptedanimation", 1, true) ~= nil
-            or string.find(lowered, "anim", 1, true) ~= nil
-            or string.find(lowered, "glow", 1, true) ~= nil
-    end
-
-    local function shouldNeverSuppress(target)
-        if not target then
-            return true
-        end
-
-        local name = target.GetName and target:GetName() or ""
-        local lowered = string.lower(tostring(name or ""))
-        if lowered == "" then
-            return false
-        end
-
-        return string.find(lowered, "tooltip", 1, true) ~= nil
-            or string.find(lowered, "moneyframe", 1, true) ~= nil
-            or string.find(lowered, "lootframe", 1, true) ~= nil
-            or string.find(lowered, "merchantframe", 1, true) ~= nil
-    end
-
-    local function applyHardVisibilitySuppression(target)
-        if not target or not target.Hide then
-            return
-        end
-
-        if not shouldHardSuppress(target) then
-            return
-        end
-
-        if suppress then
-            if target.PreydatorWasShown == nil and target.IsShown then
-                target.PreydatorWasShown = target:IsShown() and true or false
+    else
+        if frameRef.PreydatorWasShown then
+            frameRef.PreydatorWasShown = nil
+            if frameRef.Show then
+                pcall(frameRef.Show, frameRef)
             end
-            pcall(target.Hide, target)
-            return
-        end
-
-        if target.PreydatorWasShown then
-            target.PreydatorWasShown = nil
-            if target.Show then
-                pcall(target.Show, target)
-            end
-        elseif target.PreydatorWasShown ~= nil then
-            target.PreydatorWasShown = nil
+        elseif frameRef.PreydatorWasShown ~= nil then
+            frameRef.PreydatorWasShown = nil
         end
     end
-
-    local function applyAnimationSuppression(target)
-        if not target or not target.GetAnimationGroups then
-            return
-        end
-
-        local okGroups, groups = pcall(function()
-            return { target:GetAnimationGroups() }
-        end)
-        if not okGroups or type(groups) ~= "table" then
-            return
-        end
-
-        for _, group in ipairs(groups) do
-            if group then
-                if suppress then
-                    local isPlaying = false
-                    if group.IsPlaying then
-                        local okPlaying, playing = pcall(group.IsPlaying, group)
-                        isPlaying = okPlaying and playing and true or false
-                    end
-                    group.PreydatorWasPlaying = isPlaying and true or false
-                    if group.Stop then
-                        pcall(group.Stop, group)
-                    end
-                elseif group.PreydatorWasPlaying then
-                    group.PreydatorWasPlaying = nil
-                    if group.Play then
-                        pcall(group.Play, group)
-                    end
-                end
-            end
-        end
-    end
-
-    local function applyToFrameTree(node, depth)
-        if not node or visited[node] or depth > 8 then
-            return
-        end
-
-        if shouldNeverSuppress(node) then
-            return
-        end
-
-        visited[node] = true
-        applyAnimationSuppression(node)
-        applyHardVisibilitySuppression(node)
-
-        if node.SetAlpha then
-            if suppress then
-                if node.PreydatorOriginalAlpha == nil and node.GetAlpha then
-                    node.PreydatorOriginalAlpha = node:GetAlpha()
-                end
-                node:SetAlpha(0)
-            elseif node.PreydatorOriginalAlpha ~= nil then
-                node:SetAlpha(node.PreydatorOriginalAlpha)
-            end
-        end
-
-        if node.GetRegions then
-            local regions = { node:GetRegions() }
-            for _, region in ipairs(regions) do
-                applyAnimationSuppression(region)
-                applyHardVisibilitySuppression(region)
-                if region and region.SetAlpha then
-                    if suppress then
-                        if region.PreydatorOriginalAlpha == nil and region.GetAlpha then
-                            region.PreydatorOriginalAlpha = region:GetAlpha()
-                        end
-                        region:SetAlpha(0)
-                    elseif region.PreydatorOriginalAlpha ~= nil then
-                        region:SetAlpha(region.PreydatorOriginalAlpha)
-                    end
-                end
-            end
-        end
-
-        if node.GetChildren then
-            local children = { node:GetChildren() }
-            for _, child in ipairs(children) do
-                applyToFrameTree(child, depth + 1)
-            end
-        end
-    end
-
-    applyToFrameTree(frameRef, 0)
 
     if frameRef.EnableMouse then
-        frameRef:EnableMouse(not suppress)
-    end
-end
-
-local function ApplySuppressionToImmediateWidgetParent(frameRef, containerFrame, suppress)
-    if not frameRef or not frameRef.GetParent then
-        return
-    end
-
-    local okParent, parent = pcall(frameRef.GetParent, frameRef)
-    if not okParent or not parent or parent == UIParent then
-        return
-    end
-
-    local parentName = parent.GetName and parent:GetName() or ""
-    local containerName = containerFrame and containerFrame.GetName and containerFrame:GetName() or ""
-    local loweredParent = string.lower(tostring(parentName))
-    local loweredContainer = string.lower(tostring(containerName))
-
-    local safeParent = parent == containerFrame
-        or (loweredParent ~= "" and string.find(loweredParent, "uiwidget", 1, true) ~= nil)
-        or (loweredContainer ~= "" and loweredParent ~= "" and string.find(loweredParent, loweredContainer, 1, true) ~= nil)
-
-    if safeParent then
-        ApplyWidgetFrameSuppression(parent, suppress)
+        pcall(frameRef.EnableMouse, frameRef, not suppress)
     end
 end
 
@@ -3553,12 +3451,16 @@ local function TryGetPreyQuestWaypoint(questID)
 
     addMapCandidate(state and state.preyZoneMapID)
     if C_Map and C_Map.GetBestMapForUnit then
-        addMapCandidate(C_Map.GetBestMapForUnit("player"))
+        local okPlayerMapID, playerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        addMapCandidate(okPlayerMapID and playerMapID or nil)
     end
 
     if C_TaskQuest and C_TaskQuest.GetQuestLocation then
         for _, mapID in ipairs(mapCandidates) do
-            local x, y = C_TaskQuest.GetQuestLocation(questID, mapID)
+            local okCoords, x, y = pcall(C_TaskQuest.GetQuestLocation, questID, mapID)
+            if not okCoords then
+                x, y = nil, nil
+            end
             if x and y then
                 return mapID, x, y
             end
@@ -3567,7 +3469,8 @@ local function TryGetPreyQuestWaypoint(questID)
 
     if C_QuestLog and C_QuestLog.GetQuestsOnMap then
         for _, mapID in ipairs(mapCandidates) do
-            local questsOnMap = C_QuestLog.GetQuestsOnMap(mapID)
+            local okQuests, questsOnMap = pcall(C_QuestLog.GetQuestsOnMap, mapID)
+            questsOnMap = okQuests and questsOnMap or nil
             if type(questsOnMap) == "table" then
                 for _, questInfo in ipairs(questsOnMap) do
                     if questInfo and questInfo.questID == questID and questInfo.x and questInfo.y then
@@ -3597,9 +3500,9 @@ TryOpenPreyQuestOnMap = function()
     if OpenQuestMap then
         pcall(OpenQuestMap)
     elseif ToggleWorldMap then
-        ToggleWorldMap()
+        pcall(ToggleWorldMap)
     elseif _G.WorldMapFrame and _G.WorldMapFrame.Show then
-        _G.WorldMapFrame:Show()
+        pcall(_G.WorldMapFrame.Show, _G.WorldMapFrame)
     end
 
     if QuestMapFrame_OpenToQuestDetails then
@@ -3611,11 +3514,12 @@ TryOpenPreyQuestOnMap = function()
     if not superTrackedQuest then
         local mapID, x, y = TryGetPreyQuestWaypoint(questID)
         if mapID and x and y and C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates then
-            local waypointPoint = UiMapPoint.CreateFromCoordinates(mapID, x, y)
+            local okWaypoint, waypointPoint = pcall(UiMapPoint.CreateFromCoordinates, mapID, x, y)
+            waypointPoint = okWaypoint and waypointPoint or nil
             if waypointPoint then
-                C_Map.SetUserWaypoint(waypointPoint)
+                pcall(C_Map.SetUserWaypoint, waypointPoint)
                 if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
-                    C_SuperTrack.SetSuperTrackedUserWaypoint(true)
+                    pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
                 end
             end
         end
@@ -3885,39 +3789,6 @@ ApplyDefaultPreyIconVisibility = function()
         "UIWidgetPowerBarContainerFrame",
     }
 
-    local function ApplySuppressionToContainerFallback(container, widgetID)
-        if not container or not container.GetChildren then
-            return
-        end
-
-        local visited = {}
-        local function scan(node, depth)
-            if not node or visited[node] or depth > 6 then
-                return
-            end
-
-            visited[node] = true
-            local name = node.GetName and node:GetName() or ""
-            local lowered = string.lower(tostring(name))
-            local isWidgetName = string.find(lowered, "uiwidget", 1, true) ~= nil
-            local isRelated = isWidgetName
-                and (string.find(lowered, "prey", 1, true) ~= nil or string.find(lowered, "hunt", 1, true) ~= nil)
-
-            if isRelated then
-                ApplyWidgetFrameSuppression(node, suppressEncounter)
-            end
-
-            if node.GetChildren then
-                local children = { node:GetChildren() }
-                for _, child in ipairs(children) do
-                    scan(child, depth + 1)
-                end
-            end
-        end
-
-        scan(container, 0)
-    end
-
     for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
         local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
         if not okWidgets or type(widgets) ~= "table" then
@@ -3935,14 +3806,11 @@ ApplyDefaultPreyIconVisibility = function()
                         AttachStageFourMapClick(widgetFrame)
                         EnsureWidgetSuppressionHook(widgetFrame)
                         ApplyWidgetFrameSuppression(widgetFrame, suppressEncounter)
-                        ApplySuppressionToImmediateWidgetParent(widgetFrame, container, suppressEncounter)
 
                         local namedFrame = _G[globalName .. "Widget" .. tostring(numericWidgetID)]
                         AttachStageFourMapClick(namedFrame)
                         EnsureWidgetSuppressionHook(namedFrame)
                         ApplyWidgetFrameSuppression(namedFrame, suppressEncounter)
-                        ApplySuppressionToImmediateWidgetParent(namedFrame, container, suppressEncounter)
-                        ApplySuppressionToContainerFallback(container, numericWidgetID)
                     end
                 end
             end
@@ -4509,10 +4377,18 @@ local function PrintInspectState(outputMode)
         questCompleted = C_QuestLog.IsQuestFlaggedCompleted(liveQuestID) and true or false
     end
 
-    local playerMapID = (C_Map and C_Map.GetBestMapForUnit) and C_Map.GetBestMapForUnit("player") or nil
+    local playerMapID = nil
+    if C_Map and C_Map.GetBestMapForUnit then
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        local okNumericMapID, numericMapID = pcall(function()
+            return tonumber(rawPlayerMapID)
+        end)
+        playerMapID = (okPlayerMapID and okNumericMapID and numericMapID and numericMapID > 0) and numericMapID or nil
+    end
     local playerMapName = nil
     if playerMapID and C_Map and C_Map.GetMapInfo then
-        local mapInfo = C_Map.GetMapInfo(playerMapID)
+        local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
+        mapInfo = okMapInfo and mapInfo or nil
         playerMapName = mapInfo and mapInfo.name or nil
     end
 
