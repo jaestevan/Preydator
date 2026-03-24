@@ -3,11 +3,13 @@
 ## Notes: Tracks Prey Hunt progress with customizable visuals and sounds.
 ## Author: RagingAltoholic
 ## Category-enUS: Quests
+## Category-koKR: 퀘스트
 ## Category-zhCN: 任务
-## Version: 2.1.0
+## Version: 2.1.1
 ## AddonCompartmentFunc: Preydator_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: Preydator_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: Preydator_OnAddonCompartmentLeave
+## IconTexture: Interface\AddOns\Preydator\media\Preydator_64.png
 ## SavedVariables: PreydatorDB, PreydatorDebugDB
 ## OptionalDeps: Blizzard_Settings, LibStub, LibDataBroker-1.1, LibDBIcon-1.0
 

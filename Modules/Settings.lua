@@ -180,6 +180,19 @@ local HUNT_ALIGN_OPTIONS = {
     { key = "bottom", text = L["Bottom"] },
 }
 
+local ACHIEVEMENT_SIGNAL_STYLE_OPTIONS = {
+    icon_only = { text = L["Icon Only"] },
+    icon_count = { text = L["Icon + Count"] },
+    count_only = { text = L["Text Only"] },
+}
+
+local HUNT_REWARD_STYLE_OPTIONS = {
+    icon_text  = { text = L["Icon + Text"] },
+    icon_count = { text = L["Icon + Count"] },
+    text_only  = { text = L["Text Only"] },
+    icon_only  = { text = L["Icon Only"] },
+}
+
 local PERCENT_DISPLAY_OPTIONS = {
     [constants.PERCENT_DISPLAY_INSIDE] = { text = L["In Bar"] },
     [constants.PERCENT_DISPLAY_ABOVE_BAR] = { text = L["Above Bar"] },
@@ -664,19 +677,11 @@ local function BuildModulesPage(owner, parent)
         { key = "currency", label = L["Currency Module"], desc = L["Controls the currency tracker panel and currency displays."] },
         { key = "hunt", label = L["Hunt Table Module"], desc = L["Controls hunt table data, sorting, and panel features."] },
         { key = "warband", label = L["Warband Module"], desc = L["Controls the warband currency panel and roster view."] },
-        { key = "achievement", label = L["Achievement Module"], desc = L["Coming soon: achievement tracking is not available yet."], comingSoon = true },
     }
-
-    -- Keep achievements forced off until the module is implemented.
-    if customizationV2 and type(customizationV2.Set) == "function" then
-        customizationV2:Set("customizationV2.moduleEnabled.achievement", false)
-    end
 
     local initialModuleState = {}
     for _, module in ipairs(moduleList) do
-        if module.comingSoon then
-            initialModuleState[module.key] = false
-        elseif customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
+        if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
             initialModuleState[module.key] = customizationV2:IsModuleEnabled(module.key) and true or false
         else
             initialModuleState[module.key] = true
@@ -700,7 +705,6 @@ local function BuildModulesPage(owner, parent)
     local function RefreshReloadButtonVisibility()
         local hasChanges = false
         for _, module in ipairs(moduleList) do
-            if not module.comingSoon then
             local current = true
             if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
                 current = customizationV2:IsModuleEnabled(module.key) and true or false
@@ -709,7 +713,6 @@ local function BuildModulesPage(owner, parent)
             if current ~= initialModuleState[module.key] then
                 hasChanges = true
                 break
-            end
             end
         end
 
@@ -724,17 +727,11 @@ local function BuildModulesPage(owner, parent)
         local yCheck = yBase + MODULE_CHECKBOX_LIFT
 
         local moduleCheck = RegisterRefresher(owner, CreateCheckbox(parent, x, yCheck, module.label, function()
-            if module.comingSoon then
-                return false
-            end
             if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
                 return customizationV2:IsModuleEnabled(module.key)
             end
             return true
         end, function(value)
-            if module.comingSoon then
-                return
-            end
             if customizationV2 and type(customizationV2.Set) == "function" then
                 customizationV2:Set("customizationV2.moduleEnabled." .. module.key, value and true or false)
             end
@@ -742,38 +739,12 @@ local function BuildModulesPage(owner, parent)
         end))
         moduleCheck:SetScale(1)
 
-        if module.comingSoon then
-            moduleCheck:SetEnabled(false)
-            if moduleCheck.EnableMouse then
-                moduleCheck:EnableMouse(false)
-            end
-            moduleCheck:SetAlpha(0.8)
-            if moduleCheck.Text then
-                moduleCheck.Text:SetTextColor(0.72, 0.72, 0.72)
-            end
-            RegisterRefresher(owner, {
-                PreydatorRefresh = function()
-                    moduleCheck:SetEnabled(false)
-                    if moduleCheck.EnableMouse then
-                        moduleCheck:EnableMouse(false)
-                    end
-                    moduleCheck:SetAlpha(0.8)
-                    if moduleCheck.Text then
-                        moduleCheck.Text:SetTextColor(0.72, 0.72, 0.72)
-                    end
-                end,
-            })
-        end
-
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         desc:SetPoint("TOPLEFT", parent, "TOPLEFT", x + MODULE_DESC_OFFSET_X, yBase - MODULE_DESC_OFFSET_Y)
         desc:SetWidth(MODULE_DESC_WIDTH)
         desc:SetJustifyH("LEFT")
         desc:SetWordWrap(true)
         desc:SetText(module.desc or "")
-        if module.comingSoon then
-            desc:SetTextColor(0.72, 0.72, 0.72)
-        end
     end
 
     RefreshReloadButtonVisibility()
@@ -783,7 +754,7 @@ local function BuildModulesPage(owner, parent)
     note:SetWidth(500)
     note:SetJustifyH("LEFT")
     note:SetWordWrap(true)
-    note:SetText(L["Module changes require a reload to fully apply. Achievement module remains disabled until it is released."])
+    note:SetText(L["Module changes require a reload to fully apply. Hunt Table also controls achievement tracking behavior."])
     do
         local fontPath, fontSize, fontFlags = note:GetFont()
         if fontPath and fontSize then
@@ -861,6 +832,9 @@ local function BuildGlobalTopStrip(owner, parent)
         db.currencyMinimap = db.currencyMinimap or {}
         db.currencyMinimap.hide = value and true or false
         db.currencyMinimapButton = not (value and true or false)
+        if type(_G.Preydator) == "table" and type(_G.Preydator.UpdateLauncherButtonVisibility) == "function" then
+            _G.Preydator.UpdateLauncherButtonVisibility()
+        end
         RefreshCurrencyTrackerPanel()
     end)
     minimapCheck:SetSize(24, 24)
@@ -870,8 +844,6 @@ local function BuildGlobalTopStrip(owner, parent)
         PreydatorRefresh = function()
             local barEnabled = IsModuleEnabled("bar")
             local soundsEnabled = IsModuleEnabled("sounds")
-            local currencyEnabled = IsModuleEnabled("currency")
-            local warbandEnabled = IsModuleEnabled("warband")
             if lockCheck and lockCheck.PreydatorSetEnabled then
                 lockCheck:PreydatorSetEnabled(barEnabled)
             end
@@ -880,9 +852,6 @@ local function BuildGlobalTopStrip(owner, parent)
             end
             if soundCheck and soundCheck.PreydatorSetEnabled then
                 soundCheck:PreydatorSetEnabled(soundsEnabled)
-            end
-            if minimapCheck and minimapCheck.PreydatorSetEnabled then
-                minimapCheck:PreydatorSetEnabled(currencyEnabled or warbandEnabled)
             end
         end,
     }
@@ -1092,6 +1061,12 @@ local function BuildHuntPage(owner, parent)
         db.huntScannerAnchorAlign = (key == "middle" or key == "bottom") and key or "top"
         RefreshHuntTrackerPanel()
     end))
+    TrackHuntControl(CreateDropdown(content, COLUMN_LEFT_X, -340, L["Reward Display Style"], 170, HUNT_REWARD_STYLE_OPTIONS, function()
+        return db.huntScannerRewardStyle or "icon_text"
+    end, function(value)
+        db.huntScannerRewardStyle = value
+        RefreshHuntTrackerPanel()
+    end))
 
     local note = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     note:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_RIGHT_X, -10)
@@ -1141,42 +1116,35 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackHuntControl(CreateCheckbox(content, COLUMN_RIGHT_X, -300, L["Show Quest Reward Icons"], function()
-        return db.huntScannerShowRewardIcons ~= false
-    end, function(value)
-        db.huntScannerShowRewardIcons = value and true or false
-        RefreshHuntTrackerPanel()
-    end))
-
     -- Currency section
-    CreateSectionTitle(content, COLUMN_LEFT_X, -356, L["Currency Panel"])
-    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -356, 180, L["Open Currency"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -392, L["Currency Panel"])
+    local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -392, 180, L["Open Currency"], function()
         ToggleCurrencyPanel()
     end)
     TrackCurrencyControl(currencyToggleButton)
     currencyToggleButton.PreydatorRefresh = function(self)
         self:SetText((db.currencyWindowEnabled == true) and L["Close Currency"] or L["Open Currency"])
     end
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -392, L["Show Random Hunts Available"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -428, L["Show Random Hunts Available"], function()
         return db.currencyShowAffordableHunts == true
     end, function(value)
         db.currencyShowAffordableHunts = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -422, L["Hide Currency in Instance"], function()
+    TrackCurrencyControl(CreateCheckbox(content, COLUMN_LEFT_X, -458, L["Hide Currency in Instance"], function()
         return db.currencyWindowHideInInstance == true
     end, function(value)
         db.currencyWindowHideInInstance = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
 
-    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -462, L["Gain Color"], function()
+    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -498, L["Gain Color"], function()
         return db.currencyDeltaGainColor or { 0.15, 0.9, 0.35, 1 }
     end, function(color)
         db.currencyDeltaGainColor = { color[1], color[2], color[3], color[4] }
         RefreshCurrencyTrackerPanel()
     end, true))
-    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -506, L["Spend Color"], function()
+    TrackCurrencyControl(CreateColorButton(content, COLUMN_LEFT_X, -542, L["Spend Color"], function()
         return db.currencyDeltaLossColor or { 0.95, 0.25, 0.2, 1 }
     end, function(color)
         db.currencyDeltaLossColor = { color[1], color[2], color[3], color[4] }
@@ -1184,7 +1152,7 @@ local function BuildHuntPage(owner, parent)
     end, true))
 
     local previewTitle = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    previewTitle:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -552)
+    previewTitle:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -588)
     previewTitle:SetText(L["Delta Preview"])
 
     local function ResolveCurrencyThemeSurface(key, colorKey)
@@ -1224,9 +1192,9 @@ local function BuildHuntPage(owner, parent)
     end
 
     local previewBoxes = {
-        CreateDeltaPreviewBox(COLUMN_LEFT_X, -574),
-        CreateDeltaPreviewBox(COLUMN_LEFT_X + 46, -574),
-        CreateDeltaPreviewBox(COLUMN_LEFT_X + 92, -574),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X, -610),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X + 46, -610),
+        CreateDeltaPreviewBox(COLUMN_LEFT_X + 92, -610),
     }
 
     RegisterRefresher(owner, {
@@ -1248,7 +1216,7 @@ local function BuildHuntPage(owner, parent)
         end,
     })
 
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -404, L["Currency Width"], 240, 520, 4, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -440, L["Currency Width"], 240, 520, 4, function()
         return db.currencyWindowWidth or 336
     end, function(value)
         db.currencyWindowWidth = math.floor(value + 0.5)
@@ -1256,7 +1224,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -458, L["Currency Height"], 64, 700, 4, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -494, L["Currency Height"], 64, 700, 4, function()
         return db.currencyWindowHeight or 280
     end, function(value)
         db.currencyWindowHeight = math.floor(value + 0.5)
@@ -1264,7 +1232,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -512, L["Currency Font Size"], 10, 24, 1, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -548, L["Currency Font Size"], 10, 24, 1, function()
         return db.currencyWindowFontSize or 12
     end, function(value)
         db.currencyWindowFontSize = math.floor(value + 0.5)
@@ -1272,7 +1240,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -566, L["Currency Scale"], 0.70, 1.40, 0.05, function()
+    TrackCurrencyControl(CreateSlider(content, COLUMN_RIGHT_X, -602, L["Currency Scale"], 0.70, 1.40, 0.05, function()
         return db.currencyWindowScale or 1.00
     end, function(value)
         db.currencyWindowScale = value
@@ -1282,52 +1250,52 @@ local function BuildHuntPage(owner, parent)
     end))
 
     -- Warband section
-    CreateSectionTitle(content, COLUMN_LEFT_X, -694, L["Warband Panel"])
-    local warbandToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -694, 180, L["Open Warband"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -730, L["Warband Panel"])
+    local warbandToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -730, 180, L["Open Warband"], function()
         ToggleWarbandPanel()
     end)
     TrackWarbandControl(warbandToggleButton)
     warbandToggleButton.PreydatorRefresh = function(self)
         self:SetText((db.currencyWarbandWindowEnabled == true) and L["Close Warband"] or L["Open Warband"])
     end
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -754, L["Show Realm"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -790, L["Show Realm"], function()
         return db.currencyShowRealmInWarband == true
     end, function(value)
         db.currencyShowRealmInWarband = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -782, L["Track Alts Weekly"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -818, L["Track Alts Weekly"], function()
         return db.currencyWarbandShowPreyTrack ~= false
     end, function(value)
         db.currencyWarbandShowPreyTrack = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -810, L["Show Prey Weekly Completed"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -846, L["Show Prey Weekly Completed"], function()
         return db.currencyWarbandPreyMode == "completed"
     end, function(value)
         db.currencyWarbandPreyMode = value and "completed" or "available"
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -838, L["Hide Low Level Alts (78)"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -874, L["Hide Low Level Alts (78)"], function()
         return db.currencyWarbandHideLowLevel == true
     end, function(value)
         db.currencyWarbandHideLowLevel = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -866, L["Use Icons for Warband Currencies"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -902, L["Use Icons for Warband Currencies"], function()
         return db.currencyWarbandUseIcons == true
     end, function(value)
         db.currencyWarbandUseIcons = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
-    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -894, L["Hide Warband in Instance"], function()
+    TrackWarbandControl(CreateCheckbox(content, COLUMN_LEFT_X, -930, L["Hide Warband in Instance"], function()
         return db.currencyWarbandWindowHideInInstance == true
     end, function(value)
         db.currencyWarbandWindowHideInInstance = value and true or false
         RefreshCurrencyTrackerPanel()
     end))
 
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -724, L["Warband Width"], 150, 900, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -760, L["Warband Width"], 150, 900, 1, function()
         return db.currencyWarbandWidth or 420
     end, function(value)
         db.currencyWarbandWidth = math.floor(value + 0.5)
@@ -1335,7 +1303,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -776, L["Warband Height"], 80, 600, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -812, L["Warband Height"], 80, 600, 1, function()
         return db.currencyWarbandHeight or 250
     end, function(value)
         db.currencyWarbandHeight = math.floor(value + 0.5)
@@ -1343,7 +1311,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -828, L["Warband Font Size"], 10, 24, 1, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -864, L["Warband Font Size"], 10, 24, 1, function()
         return db.currencyWarbandFontSize or 12
     end, function(value)
         db.currencyWarbandFontSize = math.floor(value + 0.5)
@@ -1351,7 +1319,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -880, L["Warband Scale"], 0.70, 1.40, 0.05, function()
+    TrackWarbandControl(CreateSlider(content, COLUMN_RIGHT_X, -916, L["Warband Scale"], 0.70, 1.40, 0.05, function()
         return db.currencyWarbandScale or 1.0
     end, function(value)
         db.currencyWarbandScale = value
@@ -1360,11 +1328,11 @@ local function BuildHuntPage(owner, parent)
         return string.format("%.2f", value)
     end))
 
-    CreateSectionTitle(content, COLUMN_LEFT_X, -980, L["Characters in Tracker"])
-    TrackWarbandControl(CreateActionButton(content, COLUMN_LEFT_X, -1012, 180, L["Select All Characters"], function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -1016, L["Characters in Tracker"])
+    TrackWarbandControl(CreateActionButton(content, COLUMN_LEFT_X, -1048, 180, L["Select All Characters"], function()
         SetAllWarbandCharactersShown(true)
     end))
-    TrackWarbandControl(CreateActionButton(content, COLUMN_RIGHT_X, -1012, 200, L["Remove Unchecked Characters"], function()
+    TrackWarbandControl(CreateActionButton(content, COLUMN_RIGHT_X, -1048, 200, L["Remove Unchecked Characters"], function()
         PurgeHiddenWarbandCharacters()
     end))
     for index, entry in ipairs(knownCharacters) do
@@ -1373,7 +1341,7 @@ local function BuildHuntPage(owner, parent)
         local label = entry.charKey .. levelSuffix
         local rowIndex = math.floor((index - 1) / 2)
         local columnX = ((index - 1) % 2 == 0) and COLUMN_LEFT_X or COLUMN_RIGHT_X
-        TrackWarbandControl(CreateCheckbox(content, columnX, -1046 - (rowIndex * 28), label, function()
+        TrackWarbandControl(CreateCheckbox(content, columnX, -1082 - (rowIndex * 28), label, function()
             return IsWarbandCharacterShown(entry.charKey)
         end, function(value)
             SetWarbandCharacterShown(entry.charKey, value and true or false)
@@ -1381,7 +1349,7 @@ local function BuildHuntPage(owner, parent)
     end
     if #knownCharacters == 0 then
         local emptyNote = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        emptyNote:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -1046)
+        emptyNote:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_LEFT_X, -1082)
         emptyNote:SetWidth(300)
         emptyNote:SetJustifyH("LEFT")
         emptyNote:SetWordWrap(true)
@@ -3018,13 +2986,85 @@ local function BuildThemePage(owner, parent)
 end
 
 local function BuildAchievementsPage(owner, parent)
+    local db = api.GetSettings()
+
+    local function ToggleAchievementPreview()
+        local huntScanner = Preydator:GetModule("HuntScanner")
+        local enabled = not (db.huntScannerPreviewInOptions == true)
+        if huntScanner and type(huntScanner.SetPreviewEnabled) == "function" then
+            huntScanner:SetPreviewEnabled(enabled)
+        else
+            db.huntScannerPreviewInOptions = enabled
+            RefreshHuntTrackerPanel()
+        end
+        owner:RefreshControls()
+    end
+
     CreateSectionTitle(parent, COLUMN_LEFT_X, -10, L["Achievements"])
     local note = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     note:SetPoint("TOPLEFT", parent, "TOPLEFT", COLUMN_LEFT_X, -42)
-    note:SetWidth(420)
+    note:SetWidth(560)
     note:SetJustifyH("LEFT")
     note:SetWordWrap(true)
-    note:SetText(L["Achievement tracking coming soon."])
+    note:SetText(L["Hunt Tracker drives achievement indicators and tooltips in the hunt list. Use preview to test icon style, icon size, and tooltip names with sample achievement data."])
+
+    local previewButton = RegisterRefresher(owner, CreateActionButton(parent, COLUMN_RIGHT_X, -86, 180, L["Show Preview Pane"], function()
+        ToggleAchievementPreview()
+    end))
+    previewButton.PreydatorRefresh = function(self)
+        self:SetText((db.huntScannerPreviewInOptions == true) and L["Hide Preview Pane"] or L["Show Preview Pane"])
+    end
+
+    local signalCheck = RegisterRefresher(owner, CreateCheckbox(parent, COLUMN_LEFT_X, -106, L["Show Achievement Signals In Hunt Tracker"], function()
+        return db.huntScannerAchievementSignals ~= false
+    end, function(value)
+        db.huntScannerAchievementSignals = value and true or false
+        RefreshHuntTrackerPanel()
+    end))
+
+    local tooltipCheck = RegisterRefresher(owner, CreateCheckbox(parent, COLUMN_LEFT_X, -142, L["Show Achievement Names On Mouseover"], function()
+        return db.huntScannerAchievementTooltip ~= false
+    end, function(value)
+        db.huntScannerAchievementTooltip = value and true or false
+        RefreshHuntTrackerPanel()
+    end))
+
+    local styleDropdown = RegisterRefresher(owner, CreateDropdown(parent, COLUMN_LEFT_X, -194, L["Achievement Signal Style"], 170, ACHIEVEMENT_SIGNAL_STYLE_OPTIONS, function()
+        return db.huntScannerAchievementSignalStyle or "icon_count"
+    end, function(value)
+        db.huntScannerAchievementSignalStyle = value
+        RefreshHuntTrackerPanel()
+    end))
+
+    local iconSizeSlider = RegisterRefresher(owner, CreateSlider(parent, COLUMN_LEFT_X, -250, L["Achievement Icon Size"], 12, 32, 1, function()
+        return tonumber(db.huntScannerAchievementIconSize) or 18
+    end, function(value)
+        db.huntScannerAchievementIconSize = math.floor(value + 0.5)
+        RefreshHuntTrackerPanel()
+    end, function(value)
+        return tostring(math.floor(value + 0.5))
+    end))
+
+    RegisterRefresher(owner, {
+        PreydatorRefresh = function()
+            local enabled = db.huntScannerAchievementSignals ~= false
+            if tooltipCheck and tooltipCheck.PreydatorSetEnabled then
+                tooltipCheck:PreydatorSetEnabled(enabled)
+            end
+            if styleDropdown and styleDropdown.PreydatorSetEnabled then
+                styleDropdown:PreydatorSetEnabled(enabled)
+            end
+            if iconSizeSlider and iconSizeSlider.PreydatorSetEnabled then
+                iconSizeSlider:PreydatorSetEnabled(enabled and (db.huntScannerAchievementSignalStyle ~= "count_only"))
+            end
+            if signalCheck and signalCheck.PreydatorSetEnabled then
+                signalCheck:PreydatorSetEnabled(IsModuleEnabled("hunt"))
+            end
+            if previewButton and previewButton.PreydatorSetEnabled then
+                previewButton:PreydatorSetEnabled(IsModuleEnabled("hunt"))
+            end
+        end,
+    })
 end
 
 local function BuildProfilesPage(owner, parent)
@@ -3311,7 +3351,7 @@ local function BuildAdvancedPage(owner, parent)
     end)
 
     CreateSectionTitle(parent, ADV_LEFT_X, -166, L["Maintenance"])
-    CreateAdvancedNote(ADV_LEFT_X, -196, L["Utility actions for release notes and hunt scanner cache refresh."])
+    CreateAdvancedNote(ADV_LEFT_X, -196, L["Utility actions for release notes and hunt scanner cache maintenance."])
 
     CreateActionButton(parent, ADV_LEFT_X, -234, ADV_BUTTON_WIDTH, L["Show What's New"], function()
         db.currencyWhatsNewSeenVersion = nil
@@ -3336,8 +3376,16 @@ local function BuildAdvancedPage(owner, parent)
         end
     end)
 
-    CreateSectionTitle(parent, ADV_LEFT_X, -352, L["Notes"])
-    CreateAdvancedNote(ADV_LEFT_X, -382, L["HINT_ADVANCED_NOTES"])
+    CreateActionButton(parent, ADV_LEFT_X, -330, ADV_BUTTON_WIDTH, L["Clear Achievement Cache"], function()
+        local huntScanner = Preydator:GetModule("HuntScanner")
+        if huntScanner and type(huntScanner.ClearAchievementCache) == "function" then
+            huntScanner:ClearAchievementCache()
+            print("Preydator: Cleared hunt achievement cache.")
+        end
+    end)
+
+    CreateSectionTitle(parent, ADV_LEFT_X, -384, L["Notes"])
+    CreateAdvancedNote(ADV_LEFT_X, -414, L["HINT_ADVANCED_NOTES"])
 
     -- Right column: restore + debug
     CreateSectionTitle(parent, ADV_RIGHT_X, -10, L["Restore / Reset"])
@@ -3395,6 +3443,12 @@ local function BuildAdvancedPage(owner, parent)
         return db.currencyDebugEvents == true
     end, function(value)
         db.currencyDebugEvents = value and true or false
+    end))
+
+    RegisterRefresher(owner, CreateCheckbox(parent, ADV_RIGHT_X, -318, L["Verbose Bloody Command Debug"], function()
+        return db.debugBloodyCommand == true
+    end, function(value)
+        db.debugBloodyCommand = value and true or false
     end))
 end
 

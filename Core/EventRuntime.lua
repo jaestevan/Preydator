@@ -30,6 +30,15 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
         return true
     end
 
+    -- Blizzard_UIWidgets is a delayed sub-addon. Gate the mixin suppression hook
+    -- and first icon-visibility pass on its load so widget APIs are guaranteed present.
+    if event == "ADDON_LOADED" and arg1 == "Blizzard_UIWidgets" then
+        if type(ctx.onBlizzardWidgetsLoaded) == "function" then
+            ctx.onBlizzardWidgetsLoaded()
+        end
+        return true
+    end
+
     if event == "ADDON_LOADED" then
         return true
     end
@@ -51,6 +60,12 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
     -- Gate module fanout for noisy UI widget events when no prey context exists.
     -- Keep this lazy so non-noisy events do not pay quest/cache costs.
     local isNoisyEvent = event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS"
+    if event == "UPDATE_UI_WIDGET" and type(ctx.isRelevantWidgetUpdateEvent) == "function" then
+        if ctx.isRelevantWidgetUpdateEvent(arg1, arg2) ~= true then
+            return true
+        end
+    end
+
     local now
     local isPreySignalEvent = isNoisyEvent
         or event == "CHAT_MSG_SYSTEM"
@@ -58,7 +73,6 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
         or event == "CHAT_MSG_MONSTER_YELL"
         or event == "CHAT_MSG_MONSTER_EMOTE"
         or event == "RAID_BOSS_EMOTE"
-        or event == "UNIT_AURA"
         or event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW"
         or event == "QUEST_DETAIL"
         or event == "QUEST_ACCEPTED"
@@ -116,12 +130,7 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
     end
 
     if event == "CHAT_MSG_SYSTEM" or event == "CHAT_MSG_MONSTER_SAY" or event == "CHAT_MSG_MONSTER_YELL" or event == "CHAT_MSG_MONSTER_EMOTE" or event == "RAID_BOSS_EMOTE" then
-        -- Alert modules (Core/Alerts.lua) own ambush chat handling.
-        return true
-    end
-
-    if event == "UNIT_AURA" then
-        -- Alert modules (Core/Alerts.lua) own Bloody Command aura handling.
+        -- Alert modules (Core/Alerts.lua) own ambush and Bloody Command chat handling.
         return true
     end
 

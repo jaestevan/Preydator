@@ -25,6 +25,10 @@ local GetObjectiveText = _G.GetObjectiveText
 local GetNumQuestChoices = _G.GetNumQuestChoices
 local HookSecureFunc = _G.hooksecurefunc
 local HideUIPanel = _G.HideUIPanel
+local GameTooltip = _G.GameTooltip
+local GetAchievementInfo = _G.GetAchievementInfo
+local GetAchievementNumCriteria = _G.GetAchievementNumCriteria
+local GetAchievementCriteriaInfo = _G.GetAchievementCriteriaInfo
 local geterrorhandler = _G.geterrorhandler
 local strsplit = _G.strsplit
 local tonumber = _G.tonumber
@@ -80,6 +84,18 @@ local panelScrollBar
 local DIFFICULTY_NORMAL = "normal"
 local DIFFICULTY_HARD = "hard"
 local DIFFICULTY_NIGHTMARE = "nightmare"
+local ACHIEVEMENT_CRITERIA_TYPE_QUEST = 27
+local ACHIEVEMENT_BADGE_ICON = "Interface\\AchievementFrame\\UI-Achievement-TinyShield"
+local ACHIEVEMENT_CACHE_MIN_REBUILD_SECONDS = 2.0
+local TRACKED_PREY_ACHIEVEMENT_IDS = {
+    42701, 42702, 42703,
+    61386, 61387, 61388, 61389, 61391, 61392,
+    62134, 62135, 62136, 62137, 62138, 62139, 62140, 62141, 62142, 62143, 62144,
+    62153, 62154, 62155, 62156, 62157, 62158, 62159, 62160, 62161, 62162,
+    62163, 62164, 62165, 62166, 62167, 62168, 62169,
+    62173, 62174, 62175, 62176, 62177, 62178, 62179, 62180, 62181, 62182, 62183, 62184,
+    62351, 62383, 62403,
+}
 local availabilityCache = {
     normal = 0,
     hard = 0,
@@ -93,6 +109,12 @@ local questCoords = {}
 local cachedAdventureMapID = nil
 local queueDebounceUntil = 0
 local SNAPSHOT_QUEUE_DEBOUNCE_SECONDS = 0.15
+local achievementNeedsByQuestID = {}
+local achievementNeedsByNameKey = {}
+local completedAchievementCache = {}
+local achievementCacheDirty = true
+local lastAchievementCacheBuildAt = 0
+local PANEL_ROW_POOL_SIZE = 20
 
 local HandleInteractionSnapshot
 local QueueInteractionSnapshotPasses
@@ -105,6 +127,12 @@ local IsMissionFrameVisible
 local IsOptionsPreviewVisible
 local HasActivePreyQuest
 local IsHuntRuntimeEnabled
+local LoadCompletedAchievementCache
+local MarkAchievementCompleted
+local IsAchievementCompletedCached
+local AddAchievementNameMatch
+local BuildAchievementMatchKey
+local AddAchievementNeed
 
 local function SetNoisyEventSubscriptions(enabled)
     if not huntEventFrame then
@@ -139,10 +167,11 @@ local function SyncNoisyEventSubscriptions()
         return
     end
 
+    local panelShown = panelFrame and panelFrame.IsShown and panelFrame:IsShown() == true
     local enabled = IsMissionFrameVisible()
         or huntInteractionActive
         or IsOptionsPreviewVisible()
-        or HasActivePreyQuest()
+        or (HasActivePreyQuest() and panelShown)
     SetNoisyEventSubscriptions(enabled)
 end
 
@@ -238,27 +267,109 @@ IsOptionsPreviewVisible = function()
 
     local settingsModule = Preydator and Preydator.GetModule and Preydator:GetModule("Settings")
     local panel = settingsModule and settingsModule.optionsPanel
-    return panel and panel.IsVisible and panel:IsVisible() == true
+    if not (panel and panel.IsVisible and panel:IsVisible() == true) then
+        return false
+    end
+
+    -- Preview should never override live hunt anchoring while hunt UI is active.
+    if (_G.CovenantMissionFrame and _G.CovenantMissionFrame.IsShown and _G.CovenantMissionFrame:IsShown())
+        or (_G.GossipFrame and _G.GossipFrame.IsShown and _G.GossipFrame:IsShown())
+        or (_G.QuestFrame and _G.QuestFrame.IsShown and _G.QuestFrame:IsShown()) then
+        return false
+    end
+
+    return true
 end
 
 local function BuildPreviewRows()
+    local function BuildPreviewReward(entries)
+        local settings = GetSettings() or {}
+        local style = settings.huntScannerRewardStyle or "icon_text"
+        local allowIcons = (style == "icon_text" or style == "icon_only" or style == "icon_count")
+        local iconOnly = style == "icon_only"
+        local iconCount = style == "icon_count"
+        local values = {}
+
+        for _, entry in ipairs(entries or {}) do
+            local text = tostring(entry or "")
+            if text ~= "" then
+                if not allowIcons then
+                    text = (text:gsub("|T[^|]+|t%s*", ""))
+                elseif iconCount then
+                    local iconTag = text:match("(|T[^|]+|t)")
+                    local stripped = (text:gsub("|T[^|]+|t%s*", ""))
+                    local amount = stripped:match("^%s*(%d[%d%,%.]*)") 
+                    if iconTag and amount then
+                        text = iconTag .. " x" .. amount
+                    elseif iconTag then
+                        text = iconTag
+                    else
+                        text = stripped
+                    end
+                elseif iconOnly then
+                    local iconTag = text:match("(|T[^|]+|t)")
+                    text = iconTag or (text:gsub("|T[^|]+|t%s*", ""))
+                end
+                if text ~= "" then
+                    values[#values + 1] = text
+                end
+            end
+        end
+
+        return table.concat(values, ", ")
+    end
+
     return {
         {
             questID = nil,
-            title = L["Preview: Normal Hunt"],
-            reward = "1,250 " .. L["Experience"] .. " | 50 Anguish | Preview Cache Reward",
+            title = "|cff6cff8f[N]|r " .. L["Preview: Normal Hunt"],
+            reward = BuildPreviewReward({
+                "|T237274:14:14:0:0|t 1,250 " .. L["Experience"],
+                "|T4638297:14:14:0:0|t 50 Anguish",
+                "|T134063:14:14:0:0|t Preview Cache Reward",
+            }),
+            zone = "Dawnshore Coast",
+            difficulty = L["Normal"],
+            achievementCount = 1,
+            achievementNames = {
+                "Prey: Normal Mode I",
+            },
             canAccept = false,
         },
         {
             questID = nil,
-            title = L["Preview: Hard Hunt"],
-            reward = "62 Anguish | 1 Voidlight Marl | Preview Trinket",
+            title = "|cffffaa3d[H]|r " .. L["Preview: Hard Hunt"],
+            reward = BuildPreviewReward({
+                "|T4638297:14:14:0:0|t 62 Anguish",
+                "|T4638530:14:14:0:0|t 1 Voidlight Marl",
+                "|T132625:14:14:0:0|t Preview Trinket",
+            }),
+            zone = "Twilight Ridge",
+            difficulty = L["Hard"],
+            achievementCount = 2,
+            achievementNames = {
+                "Prey: Hard Mode I",
+                "Prey: Ethereal Assassins (Hard)",
+            },
             canAccept = false,
         },
         {
             questID = nil,
-            title = L["Preview: Nightmare Hunt"],
-            reward = "78 Anguish | 1 Champ. Crest | Preview Weapon",
+            title = "|cffff5a5a[Ni]|r " .. L["Preview: Nightmare Hunt"],
+            reward = BuildPreviewReward({
+                "|T4638297:14:14:0:0|t 78 Anguish",
+                "|T4638548:14:14:0:0|t 1 Champ. Crest",
+                "|T135274:14:14:0:0|t Preview Weapon",
+            }),
+            zone = "Umbral Wastes",
+            difficulty = L["Nightmare"],
+            achievementCount = 4,
+            achievementNames = {
+                "Prey: Nightmare Mode I",
+                "Prey: Chasing Death (Nightmare)",
+                "Prey: No Rest for the Wretched (Nightmare)",
+                "Prey: Ethereal Assassins (Nightmare)",
+            },
             canAccept = false,
         },
     }
@@ -447,6 +558,30 @@ local function EnsureSettings()
         settings.huntScannerShowRewardIcons = true
     end
 
+    if settings.huntScannerAchievementSignals == nil then
+        settings.huntScannerAchievementSignals = true
+    end
+
+    if settings.huntScannerAchievementSignalStyle ~= "icon_only"
+        and settings.huntScannerAchievementSignalStyle ~= "icon_count"
+        and settings.huntScannerAchievementSignalStyle ~= "count_only" then
+        if settings.huntScannerAchievementShowCount == false then
+            settings.huntScannerAchievementSignalStyle = "icon_only"
+        else
+            settings.huntScannerAchievementSignalStyle = "icon_count"
+        end
+    end
+
+    if settings.huntScannerAchievementShowCount == nil then
+        settings.huntScannerAchievementShowCount = true
+    end
+
+    if settings.huntScannerAchievementTooltip == nil then
+        settings.huntScannerAchievementTooltip = true
+    end
+
+    settings.huntScannerAchievementIconSize = math.max(12, math.min(32, tonumber(settings.huntScannerAchievementIconSize) or 18))
+
     if settings.themeEditorPreviewInOptions == nil then
         settings.themeEditorPreviewInOptions = false
     end
@@ -475,6 +610,139 @@ local function EnsureSettings()
     settings.huntScannerHeight = math.max(320, math.min(900, tonumber(settings.huntScannerHeight) or 460))
     settings.huntScannerFontSize = math.max(10, math.min(24, tonumber(settings.huntScannerFontSize) or 12))
     settings.huntScannerScale = math.max(0.70, math.min(1.60, tonumber(settings.huntScannerScale) or 1.00))
+end
+
+local function AddUniqueString(target, value)
+    if type(target) ~= "table" or type(value) ~= "string" or value == "" then
+        return
+    end
+
+    for _, existing in ipairs(target) do
+        if existing == value then
+            return
+        end
+    end
+
+    target[#target + 1] = value
+end
+
+local function AddUniqueNumber(target, value)
+    if type(target) ~= "table" or type(value) ~= "number" then
+        return
+    end
+
+    for _, existing in ipairs(target) do
+        if existing == value then
+            return
+        end
+    end
+
+    target[#target + 1] = value
+end
+
+local function SortStrings(values)
+    if type(values) ~= "table" or #values < 2 then
+        return values
+    end
+
+    table.sort(values, function(left, right)
+        return tostring(left or "") < tostring(right or "")
+    end)
+    return values
+end
+
+local function RebuildAchievementNeedsCache()
+    wipe(achievementNeedsByQuestID)
+    wipe(achievementNeedsByNameKey)
+    lastAchievementCacheBuildAt = GetTime and (tonumber(GetTime()) or 0) or 0
+    achievementCacheDirty = false
+
+    if type(GetAchievementInfo) ~= "function"
+        or type(GetAchievementNumCriteria) ~= "function"
+        or type(GetAchievementCriteriaInfo) ~= "function" then
+        return
+    end
+
+    for _, achievementID in ipairs(TRACKED_PREY_ACHIEVEMENT_IDS) do
+        if not IsAchievementCompletedCached(achievementID) then
+            local okInfo, _, achievementName, _, achievementCompleted = pcall(GetAchievementInfo, achievementID)
+            if okInfo and achievementCompleted == true then
+                MarkAchievementCompleted(achievementID)
+            elseif okInfo then
+            local okCount, criteriaCountRaw = pcall(GetAchievementNumCriteria, achievementID)
+            local criteriaCount = (okCount and SafeToNumber(criteriaCountRaw)) or 0
+
+            for criteriaIndex = 1, criteriaCount do
+                local okCriteria, criteriaName, criteriaTypeRaw, criteriaCompleted, _, _, _, _, assetIDRaw = pcall(GetAchievementCriteriaInfo, achievementID, criteriaIndex, true)
+                local criteriaType = SafeToNumber(criteriaTypeRaw)
+                local questID = SafeToNumber(assetIDRaw)
+
+                if okCriteria
+                    and criteriaType == ACHIEVEMENT_CRITERIA_TYPE_QUEST
+                    and questID and questID > 0
+                    and criteriaCompleted ~= true then
+                    local label = (type(achievementName) == "string" and achievementName ~= "" and achievementName)
+                        or (type(criteriaName) == "string" and criteriaName ~= "" and criteriaName)
+                        or ("Achievement " .. tostring(achievementID))
+                    AddAchievementNeed(achievementNeedsByQuestID, questID, achievementID, label)
+                    AddAchievementNameMatch(achievementID, achievementName, criteriaName, label)
+                elseif okCriteria and criteriaCompleted ~= true then
+                    local label = (type(achievementName) == "string" and achievementName ~= "" and achievementName)
+                        or (type(criteriaName) == "string" and criteriaName ~= "" and criteriaName)
+                        or ("Achievement " .. tostring(achievementID))
+                    AddAchievementNameMatch(achievementID, achievementName, criteriaName, label)
+                end
+            end
+            end
+        end
+    end
+
+    for _, bucket in pairs(achievementNeedsByQuestID) do
+        SortStrings(bucket.names)
+        bucket.count = #bucket.ids
+    end
+
+    for _, bucket in pairs(achievementNeedsByNameKey) do
+        SortStrings(bucket.names)
+        bucket.count = #bucket.ids
+    end
+end
+
+local function EnsureAchievementNeedsCache(force)
+    local settings = GetSettings()
+    if not settings or settings.huntScannerAchievementSignals == false then
+        return
+    end
+
+    local now = GetTime and (tonumber(GetTime()) or 0) or 0
+    if force == true
+        or achievementCacheDirty == true
+        or (now - (lastAchievementCacheBuildAt or 0)) >= ACHIEVEMENT_CACHE_MIN_REBUILD_SECONDS then
+        RebuildAchievementNeedsCache()
+    end
+end
+
+local function GetQuestAchievementNeeds(questID, title, difficulty)
+    local id = SafeToNumber(questID)
+
+    local settings = GetSettings()
+    if not settings or settings.huntScannerAchievementSignals == false then
+        return 0, nil
+    end
+
+    EnsureAchievementNeedsCache(false)
+    local bucket = id and achievementNeedsByQuestID[id] or nil
+    if (type(bucket) ~= "table" or (bucket.count or 0) <= 0) and type(title) == "string" and title ~= "" then
+        local nameKey = BuildAchievementMatchKey(title, difficulty)
+        if nameKey then
+            bucket = achievementNeedsByNameKey[nameKey]
+        end
+    end
+    if type(bucket) ~= "table" or (bucket.count or 0) <= 0 then
+        return 0, nil
+    end
+
+    return bucket.count or 0, bucket.names
 end
 
 local function GetRewardScopeKey()
@@ -527,8 +795,89 @@ local function GetRewardStorage()
     storage.questDifficultyByID = storage.questDifficultyByID or {}
     storage.availabilityCacheByScope = storage.availabilityCacheByScope or {}
     storage.availabilityTouchedByScope = storage.availabilityTouchedByScope or {}
+    storage.completedAchievements = storage.completedAchievements or {}
 
     return storage
+end
+
+LoadCompletedAchievementCache = function()
+    if wipe then
+        wipe(completedAchievementCache)
+    else
+        for key in pairs(completedAchievementCache) do
+            completedAchievementCache[key] = nil
+        end
+    end
+
+    local storage = GetRewardStorage()
+    for achievementIDText, isCompleted in pairs(storage.completedAchievements or {}) do
+        local achievementID = SafeToNumber(achievementIDText)
+        if achievementID and isCompleted == true then
+            completedAchievementCache[achievementID] = true
+        end
+    end
+end
+
+local function SaveCompletedAchievementCache()
+    local storage = GetRewardStorage()
+    local persisted = {}
+    for achievementID, isCompleted in pairs(completedAchievementCache) do
+        if type(achievementID) == "number" and isCompleted == true then
+            persisted[tostring(achievementID)] = true
+        end
+    end
+    storage.completedAchievements = persisted
+end
+
+MarkAchievementCompleted = function(achievementID)
+    local id = SafeToNumber(achievementID)
+    if not id or completedAchievementCache[id] == true then
+        return
+    end
+
+    completedAchievementCache[id] = true
+    SaveCompletedAchievementCache()
+end
+
+IsAchievementCompletedCached = function(achievementID)
+    local id = SafeToNumber(achievementID)
+    return id and completedAchievementCache[id] == true or false
+end
+
+local function ClearCompletedAchievementCache()
+    if wipe then
+        wipe(completedAchievementCache)
+        wipe(achievementNeedsByQuestID)
+        wipe(achievementNeedsByNameKey)
+    else
+        for key in pairs(completedAchievementCache) do
+            completedAchievementCache[key] = nil
+        end
+        for key in pairs(achievementNeedsByQuestID) do
+            achievementNeedsByQuestID[key] = nil
+        end
+        for key in pairs(achievementNeedsByNameKey) do
+            achievementNeedsByNameKey[key] = nil
+        end
+    end
+
+    achievementCacheDirty = true
+    lastAchievementCacheBuildAt = 0
+    SaveCompletedAchievementCache()
+end
+
+local function ClearAvailabilityCache()
+    availabilityCache = {
+        normal = 0,
+        hard = 0,
+        nightmare = 0,
+        capturedAt = 0,
+    }
+    availabilityTouched = false
+
+    local storage = GetRewardStorage()
+    storage.availabilityCacheByScope = {}
+    storage.availabilityTouchedByScope = {}
 end
 
 local function SanitizeAvailabilityCounts(source)
@@ -591,6 +940,102 @@ local function NormalizeDifficultyKey(value)
     end
 
     return DIFFICULTY_NORMAL
+end
+
+local function NormalizeAchievementMatchText(value)
+    if type(value) ~= "string" or value == "" then
+        return nil
+    end
+
+    local text = value
+    text = string.gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+    text = string.gsub(text, "|r", "")
+    text = string.gsub(text, "^%s+", "")
+    text = string.gsub(text, "%s+$", "")
+    text = string.gsub(text, "^Prey:%s*", "")
+    text = string.gsub(text, "^Complete%s+", "")
+    text = string.gsub(text, "%s*%((Nightmare|Hard|Normal)%)%s*$", "")
+    text = string.gsub(text, "[^%w]+", " ")
+    text = string.lower(string.gsub(text, "%s+", " "))
+    text = string.gsub(text, "^%s+", "")
+    text = string.gsub(text, "%s+$", "")
+
+    if text == "" then
+        return nil
+    end
+
+    return text
+end
+
+local function ExtractAchievementDifficultyKey(...)
+    for index = 1, select("#", ...) do
+        local value = select(index, ...)
+        if type(value) == "string" and value ~= "" then
+            local lowerValue = string.lower(value)
+            if SafeFindLiteral(lowerValue, "nightmare") then
+                return DIFFICULTY_NIGHTMARE
+            end
+            if SafeFindLiteral(lowerValue, "hard") then
+                return DIFFICULTY_HARD
+            end
+            if SafeFindLiteral(lowerValue, "normal") then
+                return DIFFICULTY_NORMAL
+            end
+        end
+    end
+
+    return nil
+end
+
+BuildAchievementMatchKey = function(title, difficulty)
+    local normalizedTitle = NormalizeAchievementMatchText(title)
+    if not normalizedTitle then
+        return nil
+    end
+
+    local difficultyKey = difficulty and NormalizeDifficultyKey(difficulty) or nil
+    if difficultyKey ~= DIFFICULTY_NORMAL and difficultyKey ~= DIFFICULTY_HARD and difficultyKey ~= DIFFICULTY_NIGHTMARE then
+        difficultyKey = nil
+    end
+
+    return normalizedTitle .. "::" .. tostring(difficultyKey or "")
+end
+
+AddAchievementNeed = function(bucketMap, bucketKey, achievementID, label)
+    if type(bucketMap) ~= "table" or bucketKey == nil then
+        return
+    end
+
+    local key = type(bucketKey) == "number" and bucketKey or tostring(bucketKey)
+    if key == "" then
+        return
+    end
+
+    local bucket = bucketMap[key]
+    if not bucket then
+        bucket = {
+            ids = {},
+            names = {},
+            count = 0,
+        }
+        bucketMap[key] = bucket
+    end
+
+    AddUniqueNumber(bucket.ids, achievementID)
+    AddUniqueString(bucket.names, label)
+end
+
+AddAchievementNameMatch = function(achievementID, achievementName, criteriaName, label)
+    local difficultyKey = ExtractAchievementDifficultyKey(achievementName, criteriaName)
+    local achievementKey = BuildAchievementMatchKey(achievementName, difficultyKey)
+    if achievementKey then
+        AddAchievementNeed(achievementNeedsByNameKey, achievementKey, achievementID, label)
+    end
+
+    local criteriaKey = BuildAchievementMatchKey(criteriaName, difficultyKey)
+    if criteriaKey and criteriaKey ~= achievementKey then
+        AddAchievementNeed(achievementNeedsByNameKey, criteriaKey, achievementID, label)
+    end
 end
 
 local function MarkAvailabilityTouched()
@@ -1054,19 +1499,39 @@ local function BuildRewardSummary(questID)
         return false
     end
 
-    local function FormatRewardList(list, showIcons)
+    local function FormatRewardList(list, rewardStyle)
         if type(list) ~= "table" then
             return ""
         end
 
+        local style = rewardStyle or "icon_text"
+        local showIcons = (style == "icon_text" or style == "icon_only" or style == "icon_count")
+        local iconOnly = style == "icon_only"
+        local iconCount = style == "icon_count"
         local entries = {}
         for _, entry in ipairs(list) do
             local text = tostring(entry or "")
             if text ~= "" then
                 if not showIcons then
                     text = StripIconTags(text)
+                elseif iconCount then
+                    local iconTag = text:match("(|T[^|]+|t)")
+                    local stripped = StripIconTags(text)
+                    local amount = stripped:match("^%s*(%d[%d%,%.]*)") 
+                    if iconTag and amount then
+                        text = iconTag .. " x" .. amount
+                    elseif iconTag then
+                        text = iconTag
+                    else
+                        text = stripped
+                    end
+                elseif iconOnly then
+                    local iconTag = text:match("(|T[^|]+|t)")
+                    text = iconTag or StripIconTags(text)
                 end
-                entries[#entries + 1] = text
+                if text ~= "" then
+                    entries[#entries + 1] = text
+                end
             end
         end
 
@@ -1119,7 +1584,8 @@ local function BuildRewardSummary(questID)
     end
 
     local settings = GetSettings() or {}
-    local showRewardIcons = settings.huntScannerShowRewardIcons ~= false
+    local rewardStyle = settings.huntScannerRewardStyle or "icon_text"
+    local showRewardIcons = rewardStyle == "icon_text" or rewardStyle == "icon_only" or rewardStyle == "icon_count"
 
     if type(questID) ~= "number" or questID < 1 then
         return L["Rewards unknown"]
@@ -1148,7 +1614,7 @@ local function BuildRewardSummary(questID)
         end
 
         if #cached > 0 then
-            return FormatRewardList(cached, showRewardIcons)
+            return FormatRewardList(cached, rewardStyle)
         end
         return L["No tracked rewards"]
     end
@@ -1169,7 +1635,7 @@ local function BuildRewardSummary(questID)
         rewardCache[questID] = CopyStringList(effectiveRewards)
         SaveRewardCaches()
         if #effectiveRewards > 0 then
-            return FormatRewardList(effectiveRewards, showRewardIcons)
+            return FormatRewardList(effectiveRewards, rewardStyle)
         end
         return L["No tracked rewards"]
     end
@@ -1182,7 +1648,7 @@ local function BuildRewardSummary(questID)
 
     rewardCache[questID] = CopyStringList(rewards)
     SaveRewardCaches()
-    return FormatRewardList(rewards, showRewardIcons)
+    return FormatRewardList(rewards, rewardStyle)
 end
 
 IsMissionFrameVisible = function()
@@ -2187,7 +2653,7 @@ local function EnsurePanel()
     scrollViewport:EnableMouseWheel(true)
 
     local scrollContent = CreateFrame("Frame", nil, scrollViewport)
-    scrollContent:SetSize(panelWidth - 30, 12 * panelRowHeight)
+    scrollContent:SetSize(panelWidth - 30, PANEL_ROW_POOL_SIZE * panelRowHeight)
     scrollViewport:SetScrollChild(scrollContent)
 
     local scrollBar = CreateFrame("Slider", nil, frame, "OptionsSliderTemplate")
@@ -2222,7 +2688,7 @@ local function EnsurePanel()
     frame.PreydatorScrollContent = scrollContent
     frame.PreydatorScrollBar = scrollBar
 
-    for index = 1, 12 do
+    for index = 1, PANEL_ROW_POOL_SIZE do
         local row = CreateFrame("Frame", nil, scrollContent, "BackdropTemplate")
         row:SetPoint("TOPLEFT", scrollContent, "TOPLEFT", 0, -((index - 1) * panelRowHeight))
         row:SetSize(panelWidth - 30, panelRowHeight - 4)
@@ -2233,9 +2699,21 @@ local function EnsurePanel()
             insets = { left = 2, right = 2, top = 2, bottom = 2 },
         })
 
+        local achievementAnchor = CreateFrame("Frame", nil, row)
+        achievementAnchor:SetHeight(22)
+
+        local achievementIcon = row:CreateTexture(nil, "ARTWORK")
+        achievementIcon:SetTexture(ACHIEVEMENT_BADGE_ICON)
+        achievementIcon:SetSize(16, 16)
+        achievementIcon:Hide()
+
+        local achievement = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        achievement:SetJustifyH("RIGHT")
+        achievement:SetText("")
+
         local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         name:SetPoint("TOPLEFT", row, "TOPLEFT", 8, -7)
-        name:SetPoint("TOPRIGHT", row, "TOPRIGHT", -74, -7)
+        name:SetPoint("TOPRIGHT", row, "TOPRIGHT", -8, 0)
         name:SetJustifyH("LEFT")
         name:SetText("-")
 
@@ -2254,7 +2732,7 @@ local function EnsurePanel()
 
         local acceptButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
         acceptButton:SetSize(58, 18)
-        acceptButton:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        acceptButton:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -8, 4)
         acceptButton:SetText(L["Accept"])
         acceptButton:SetScript("OnClick", function(self)
             local questID = self:GetParent().PreydatorQuestID
@@ -2267,12 +2745,54 @@ local function EnsurePanel()
             end
         end)
 
+        -- Anchor spans the Accept button top exactly; pair is right-justified within it
+        achievementAnchor:SetPoint("BOTTOMLEFT",  acceptButton, "TOPLEFT",  0, 2)
+        achievementAnchor:SetPoint("BOTTOMRIGHT", acceptButton, "TOPRIGHT", 0, 2)
+        -- Static defaults (overridden per-style each frame):
+        -- text right-edge at anchor right, icon right-edge at text left; both y=0 (shared midline)
+        achievement:SetPoint("RIGHT", achievementAnchor, "RIGHT", 0, 2)
+        achievementIcon:SetPoint("RIGHT", achievement, "LEFT", -2, 0)
+
         row.PreydatorName = name
+        row.PreydatorAchievementAnchor = achievementAnchor
+        row.PreydatorAchievement = achievement
+        row.PreydatorAchievementIcon = achievementIcon
+        row.PreydatorAchievementCount = 0
+        row.PreydatorAchievementNames = nil
         row.PreydatorZone = zone
         row.PreydatorReward = reward
         row.PreydatorAccept = acceptButton
         row.PreydatorQuestID = nil
         row:EnableMouse(true)
+        row:SetScript("OnEnter", function(self)
+            if not GameTooltip or type(GameTooltip.SetOwner) ~= "function" then
+                return
+            end
+
+            local s = GetSettings()
+            if not s or s.huntScannerAchievementTooltip == false then
+                return
+            end
+
+            local count = SafeToNumber(self.PreydatorAchievementCount) or 0
+            if count <= 0 then
+                return
+            end
+
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:ClearLines()
+            GameTooltip:AddLine(L["Achievement Progress"], 1.0, 0.82, 0.0)
+            GameTooltip:AddLine(L["This hunt helps:"], 0.85, 0.85, 0.85)
+            for _, achievementName in ipairs(self.PreydatorAchievementNames or {}) do
+                GameTooltip:AddLine(achievementName, 1, 1, 1, true)
+            end
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function()
+            if GameTooltip and type(GameTooltip.Hide) == "function" then
+                GameTooltip:Hide()
+            end
+        end)
         row:SetScript("OnMouseUp", function(self, button)
             if button ~= "LeftButton" or not self.PreydatorQuestID then
                 return
@@ -2316,6 +2836,13 @@ local function UpdatePanelTheme(frame)
         row:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
         row:SetBackdropBorderColor(theme.border[1], theme.border[2], theme.border[3], 0.65)
         SetTextColor(row.PreydatorName, theme.title)
+        if row.PreydatorAchievement then
+            SetTextColor(row.PreydatorAchievement, theme.season)
+        end
+        if row.PreydatorAchievementIcon then
+            local season = theme.season or { 1, 1, 1, 1 }
+            row.PreydatorAchievementIcon:SetVertexColor(season[1] or 1, season[2] or 1, season[3] or 1, 1)
+        end
         if row.PreydatorZone then
             SetTextColor(row.PreydatorZone, theme.muted)
         end
@@ -2325,6 +2852,9 @@ local function UpdatePanelTheme(frame)
         end
         if row.PreydatorZone and row.PreydatorZone.SetFont then
             row.PreydatorZone:SetFont(fontPath, math.max(9, fontSize - 1), "")
+        end
+        if row.PreydatorAchievement and row.PreydatorAchievement.SetFont then
+            row.PreydatorAchievement:SetFont(fontPath, math.max(9, fontSize - 1), "")
         end
         if row.PreydatorReward and row.PreydatorReward.SetFont then
             row.PreydatorReward:SetFont(fontPath, math.max(9, fontSize - 1), "")
@@ -2349,10 +2879,11 @@ local function ApplyPanelAnchor(frame)
     local align = (settings and settings.huntScannerAnchorAlign) or "top"
     local settingsModule = Preydator and Preydator.GetModule and Preydator:GetModule("Settings")
     local previewAnchor = settingsModule and settingsModule.optionsPanel
-    local anchor = (IsOptionsPreviewVisible() and previewAnchor)
-        or (_G.CovenantMissionFrame and _G.CovenantMissionFrame:IsShown() and _G.CovenantMissionFrame)
+    local liveAnchor = (_G.CovenantMissionFrame and _G.CovenantMissionFrame:IsShown() and _G.CovenantMissionFrame)
         or (_G.GossipFrame and _G.GossipFrame.IsShown and _G.GossipFrame:IsShown() and _G.GossipFrame)
         or (_G.QuestFrame and _G.QuestFrame.IsShown and _G.QuestFrame:IsShown() and _G.QuestFrame)
+    local anchor = liveAnchor
+        or (IsOptionsPreviewVisible() and previewAnchor)
         or UIParent
 
     frame:ClearAllPoints()
@@ -2392,11 +2923,13 @@ end
 
 local function BuildQuestRows(mapHunts)
     local rows = {}
+    EnsureAchievementNeedsCache(false)
 
     for _, hunt in ipairs(mapHunts or {}) do
         local title = hunt.title or ((hunt.questID and ("Quest " .. tostring(hunt.questID))) or L["Unknown"])
         local difficulty = NormalizeDifficultyKey(hunt.difficulty)
         local badge = GetDifficultyBadge(difficulty)
+        local achievementCount, achievementNames = GetQuestAchievementNeeds(hunt.questID, hunt.title, hunt.difficulty)
 
         rows[#rows + 1] = {
             questID = hunt.questID,
@@ -2407,6 +2940,8 @@ local function BuildQuestRows(mapHunts)
             difficulty = GetDifficultyDisplayName(difficulty),
             zone = hunt.zone or L["Unknown"],
             baseTitle = title,
+            achievementCount = achievementCount,
+            achievementNames = achievementNames,
         }
     end
 
@@ -2566,7 +3101,7 @@ local function ReflowHuntRows()
     local rowPadTop = 7
     local rowPadBottom = 6
 
-    for index = 1, 12 do
+    for index = 1, PANEL_ROW_POOL_SIZE do
         local row = panelRows[index]
         if not row then
             break
@@ -2666,6 +3201,62 @@ local function RenderPanel(questRows)
             row:Show()
             row.PreydatorQuestID = SafeToNumber(data.questID)
             row.PreydatorName:SetText(data.title or "-")
+            row.PreydatorAchievementCount = SafeToNumber(data.achievementCount) or 0
+            row.PreydatorAchievementNames = data.achievementNames
+            if row.PreydatorAchievement then
+                if row.PreydatorAchievementCount > 0 and settings.huntScannerAchievementSignals ~= false then
+                    local style = settings.huntScannerAchievementSignalStyle or "icon_count"
+                    local iconSize = math.max(12, math.min(32, tonumber(settings.huntScannerAchievementIconSize) or 18))
+                    local showIcon = (style == "icon_only" or style == "icon_count")
+                    local showCount = (style == "count_only") or (style == "icon_count" and row.PreydatorAchievementCount > 1)
+
+                    if row.PreydatorAchievement then
+                        row.PreydatorAchievement:ClearAllPoints()
+                    end
+                    if row.PreydatorAchievementIcon then
+                        row.PreydatorAchievementIcon:ClearAllPoints()
+                    end
+
+                    if row.PreydatorAchievementIcon then
+                        row.PreydatorAchievementIcon:SetSize(iconSize, iconSize)
+                        row.PreydatorAchievementIcon:SetShown(showIcon)
+                    end
+
+                    local anch = row.PreydatorAchievementAnchor or row
+                    if style == "icon_only" then
+                        if row.PreydatorAchievementIcon then
+                            -- single icon: centre it in the anchor
+                            row.PreydatorAchievementIcon:SetPoint("CENTER", anch, "CENTER", 0, 0)
+                        end
+                    elseif style == "count_only" then
+                        -- text only: right-edge at anchor right, midline shared
+                        row.PreydatorAchievement:SetPoint("RIGHT", anch, "RIGHT", 0, 2)
+                    else
+                        -- icon + count: keep the icon's right edge fixed to the slot,
+                        -- then place text relative to the icon using the tuned offsets.
+                        if row.PreydatorAchievementIcon then
+                            row.PreydatorAchievementIcon:SetPoint("RIGHT", anch, "RIGHT", -16, 0)
+                            row.PreydatorAchievement:SetPoint("LEFT", row.PreydatorAchievementIcon, "RIGHT", -12, 6)
+                        else
+                            row.PreydatorAchievement:SetPoint("RIGHT", anch, "RIGHT", 0, 2)
+                        end
+                    end
+
+                    if showCount then
+                        row.PreydatorAchievement:SetText("x" .. tostring(row.PreydatorAchievementCount))
+                        row.PreydatorAchievement:Show()
+                    else
+                        row.PreydatorAchievement:SetText("")
+                        row.PreydatorAchievement:Hide()
+                    end
+                else
+                    row.PreydatorAchievement:SetText("")
+                    row.PreydatorAchievement:Hide()
+                    if row.PreydatorAchievementIcon then
+                        row.PreydatorAchievementIcon:Hide()
+                    end
+                end
+            end
             if row.PreydatorZone then
                 local showZone = not data.groupKey and data.zone and data.zone ~= "" and data.zone ~= L["Unknown"]
                 row.PreydatorZone:SetText(showZone and data.zone or "")
@@ -2706,6 +3297,15 @@ local function RenderPanel(questRows)
             end
         else
             row.PreydatorQuestID = nil
+            row.PreydatorAchievementCount = 0
+            row.PreydatorAchievementNames = nil
+            if row.PreydatorAchievement then
+                row.PreydatorAchievement:SetText("")
+                row.PreydatorAchievement:Hide()
+            end
+            if row.PreydatorAchievementIcon then
+                row.PreydatorAchievementIcon:Hide()
+            end
             if row.PreydatorAccept then
                 row.PreydatorAccept:Hide()
                 row.PreydatorAccept:Disable()
@@ -3065,6 +3665,19 @@ function HuntScannerModule:RefreshRewardCache()
     WarmRewardCacheFromPins()
 end
 
+function HuntScannerModule:ClearAchievementCache()
+    ClearCompletedAchievementCache()
+    if IsOptionsPreviewVisible() then
+        RenderPanel(BuildPreviewRows())
+        return
+    end
+    self:RefreshNow()
+end
+
+function HuntScannerModule:ClearAvailabilityCache()
+    ClearAvailabilityCache()
+end
+
 function HuntScannerModule:OnPreyQuestEnded(payload)
     if type(payload) ~= "table" then
         return
@@ -3196,7 +3809,9 @@ end
 function HuntScannerModule:OnAddonLoaded()
     EnsureSettings()
     LoadRewardCaches()
+    LoadCompletedAchievementCache()
     ProcessRewardCacheLifecycle()
+    achievementCacheDirty = true
     ApplyMissionHooks()
     SyncNoisyEventSubscriptions()
 end
@@ -3212,6 +3827,8 @@ huntEventFrame:RegisterEvent("QUEST_DETAIL")
 huntEventFrame:RegisterEvent("QUEST_PROGRESS")
 huntEventFrame:RegisterEvent("QUEST_COMPLETE")
 huntEventFrame:RegisterEvent("QUEST_FINISHED")
+huntEventFrame:RegisterEvent("ACHIEVEMENT_EARNED")
+huntEventFrame:RegisterEvent("CRITERIA_UPDATE")
 
 huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     local noisyEvent = (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS")
@@ -3245,9 +3862,23 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         EnsureSettings()
         LoadRewardCaches()
+        LoadCompletedAchievementCache()
         ProcessRewardCacheLifecycle()
+        achievementCacheDirty = true
+        EnsureAchievementNeedsCache(true)
         ApplyMissionHooks()
         SyncNoisyEventSubscriptions()
+        return
+    end
+
+    if event == "ACHIEVEMENT_EARNED" or event == "CRITERIA_UPDATE" then
+        if event == "ACHIEVEMENT_EARNED" then
+            MarkAchievementCompleted(select(1, ...))
+        end
+        achievementCacheDirty = true
+        if IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() then
+            QueueInteractionSnapshotPasses(true)
+        end
         return
     end
 

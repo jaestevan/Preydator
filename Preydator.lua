@@ -188,6 +188,7 @@ local DEFAULTS = {
         "predator-kill.ogg",
     },
     debugSounds = false,
+    debugBloodyCommand = false,
     currencyDebugEvents = false,
     currencyWindowEnabled = false,
     currencyMinimapButton = true,
@@ -253,6 +254,12 @@ local DEFAULTS = {
     huntScannerAnchorAlign = "top",
     huntScannerCollapsedGroups = {},
     huntScannerPreviewInOptions = false,
+    huntScannerRewardStyle = "icon_text",
+    huntScannerAchievementSignals = true,
+    huntScannerAchievementSignalStyle = "icon_count",
+    huntScannerAchievementIconSize = 18,
+    huntScannerAchievementShowCount = true,
+    huntScannerAchievementTooltip = true,
     ambushSoundEnabled = true,
     ambushVisualEnabled = true,
     ambushSoundPath = KILL_SOUND_PATH,
@@ -293,7 +300,6 @@ local DEFAULTS = {
             currency = true,
             hunt = true,
             warband = true,
-            achievement = false,  -- Not yet implemented
         },
     },
 }
@@ -429,6 +435,7 @@ local state = {
     preyTooltipText = nil,
     elapsedSinceUpdate = 0,
     lastWidgetSeenAt = 0,
+    lastPreyWidgetID = nil,
     lastStateDebugSnapshot = nil,
     lastDisplayPct = 0,
     lastDisplayReason = "init",
@@ -1109,6 +1116,7 @@ local function NormalizeTransientSettings()
     -- Legacy migration: older builds persisted this debug/session flag in SavedVariables.
     -- Keep an explicit false value so stale true values are always corrected on next save.
     settings.forceShowBar = false
+    settings.debugBloodyCommand = settings.debugBloodyCommand == true
 end
 
 local function NormalizeAmbushSettings()
@@ -1559,9 +1567,63 @@ TryPlaySound = function(path, ignoreSoundToggle)
         return false
     end
 
-    local channel = (settings and settings.soundChannel) or "SFX"
-    local willPlay = PlaySoundFile(path, channel)
-    AddDebugLog("TryPlaySound", "path=" .. tostring(path) .. " | channel=" .. tostring(channel) .. " | ignoreToggle=" .. tostring(ignoreSoundToggle) .. " | result=" .. tostring(willPlay), false)
+    local requestedChannel = (settings and settings.soundChannel) or "SFX"
+    local channel = requestedChannel
+    if type(channel) ~= "string" or channel == "" then
+        channel = "SFX"
+    end
+
+    local lowerChannel = string.lower(channel)
+    if lowerChannel == "master" then
+        channel = "Master"
+    elseif lowerChannel == "sfx" then
+        channel = "SFX"
+    elseif lowerChannel == "dialog" then
+        channel = "Dialog"
+    elseif lowerChannel == "ambience" then
+        channel = "Ambience"
+    end
+
+    local validChannels = {
+        Master = true,
+        SFX = true,
+        Dialog = true,
+        Ambience = true,
+    }
+
+    local channelsToTry = {}
+    local seenChannels = {}
+    local function pushChannel(candidate)
+        if type(candidate) ~= "string" or candidate == "" or seenChannels[candidate] then
+            return
+        end
+        seenChannels[candidate] = true
+        channelsToTry[#channelsToTry + 1] = candidate
+    end
+
+    if validChannels[channel] then
+        pushChannel(channel)
+    else
+        pushChannel("SFX")
+        pushChannel("Master")
+    end
+
+    local willPlay = false
+    local usedChannel = nil
+    for _, tryChannel in ipairs(channelsToTry) do
+        local result = PlaySoundFile(path, tryChannel)
+        AddDebugLog("TryPlaySound", "path=" .. tostring(path) .. " | channel=" .. tostring(tryChannel) .. " | ignoreToggle=" .. tostring(ignoreSoundToggle) .. " | result=" .. tostring(result), false)
+        if result then
+            willPlay = true
+            usedChannel = tryChannel
+            break
+        end
+    end
+
+    if willPlay and usedChannel and settings and settings.soundChannel ~= usedChannel then
+        settings.soundChannel = usedChannel
+    end
+
     if willPlay then
         local enhance = (settings and tonumber(settings.soundEnhance)) or 0
         if enhance > 0 and C_Timer and C_Timer.After then
@@ -1569,7 +1631,7 @@ TryPlaySound = function(path, ignoreSoundToggle)
             for i = 1, extraPlays do
                 local delay = i * 0.03
                 C_Timer.After(delay, function()
-                    PlaySoundFile(path, channel)
+                    PlaySoundFile(path, usedChannel or channel)
                 end)
             end
             if extraPlays > 0 then
@@ -2248,6 +2310,7 @@ local function ClearPreyStateAndDisplay()
     state.stage = 1
     state.killStageUntil = 0
     state.lastWidgetSeenAt = 0
+    state.lastPreyWidgetID = nil
     state.stageSoundPlayed = {}
     state.stageSoundAttempted = {}
     state.lastStateDebugSnapshot = nil
@@ -2263,6 +2326,58 @@ local function ClearPreyStateAndDisplay()
     if UI.barFill then
         UI.barFill:SetWidth(0)
     end
+end
+
+local function IsRelevantWidgetUpdateEvent(arg1, arg2)
+    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
+        or PREY_WIDGET_TYPE
+
+    local widgetID = nil
+    local widgetType = nil
+
+    local function readPayload(payload)
+        if type(payload) ~= "table" then
+            return
+        end
+
+        if widgetID == nil then
+            widgetID = tonumber(payload.widgetID or payload.uiWidgetID or payload.id)
+        end
+
+        if widgetType == nil then
+            widgetType = tonumber(payload.widgetType or payload.visualizationType)
+        end
+    end
+
+    readPayload(arg1)
+    readPayload(arg2)
+
+    if widgetID == nil and type(arg1) == "number" then
+        widgetID = tonumber(arg1)
+    end
+
+    if widgetType == nil and type(arg2) == "number" then
+        widgetType = tonumber(arg2)
+    end
+
+    if widgetType == preyWidgetType then
+        if widgetID then
+            state.lastPreyWidgetID = widgetID
+        end
+        return true
+    end
+
+    local trackedWidgetID = tonumber(state and state.lastPreyWidgetID) or nil
+    if widgetID and trackedWidgetID and widgetID == trackedWidgetID then
+        return true
+    end
+
+    -- Fail open when event payload format is unknown for this client build.
+    if widgetID == nil and widgetType == nil then
+        return true
+    end
+
+    return false
 end
 
 local function DebugLogPreyState(origin, questID, hasWidgetData, progressState, progressPercent, inPreyZone)
@@ -2314,10 +2429,15 @@ local function GetCandidateWidgetSetIDs()
     end
 
     if C_UIWidgetManager then
-        appendWidgetSetID(C_UIWidgetManager.GetTopCenterWidgetSetID)
-        appendWidgetSetID(C_UIWidgetManager.GetObjectiveTrackerWidgetSetID)
-        appendWidgetSetID(C_UIWidgetManager.GetBelowMinimapWidgetSetID)
+        -- The prey hunt widget lives in the PowerBar set. Query it first and only
+        -- scan the other set IDs as a fallback if PowerBar yields nothing, so we
+        -- minimise the number of protected secret-number values we ever touch.
         appendWidgetSetID(C_UIWidgetManager.GetPowerBarWidgetSetID)
+        if #UI.candidateWidgetSetIDs == 0 then
+            appendWidgetSetID(C_UIWidgetManager.GetTopCenterWidgetSetID)
+            appendWidgetSetID(C_UIWidgetManager.GetObjectiveTrackerWidgetSetID)
+            appendWidgetSetID(C_UIWidgetManager.GetBelowMinimapWidgetSetID)
+        end
     end
 
     return UI.candidateWidgetSetIDs
@@ -2354,26 +2474,33 @@ local function SetRegionShown(region, shouldShow)
     return false
 end
 
+local WIDGET_SUPPRESSION_WAS_SHOWN = setmetatable({}, { __mode = "k" })
+local WIDGET_SUPPRESSION_HOOKED = setmetatable({}, { __mode = "k" })
+local STAGE_FOUR_CLICK_HOOKED = setmetatable({}, { __mode = "k" })
+local preyHuntMixinHooked = false
+
 local function ApplyWidgetFrameSuppression(frameRef, suppress)
     if not frameRef then
         return
     end
 
+    local wasShown = WIDGET_SUPPRESSION_WAS_SHOWN[frameRef]
+
     if suppress then
-        if frameRef.PreydatorWasShown == nil and frameRef.IsShown then
-            frameRef.PreydatorWasShown = frameRef:IsShown() and true or false
+        if wasShown == nil and frameRef.IsShown then
+            WIDGET_SUPPRESSION_WAS_SHOWN[frameRef] = frameRef:IsShown() and true or false
         end
         if frameRef.Hide then
             pcall(frameRef.Hide, frameRef)
         end
     else
-        if frameRef.PreydatorWasShown then
-            frameRef.PreydatorWasShown = nil
+        if wasShown then
+            WIDGET_SUPPRESSION_WAS_SHOWN[frameRef] = nil
             if frameRef.Show then
                 pcall(frameRef.Show, frameRef)
             end
-        elseif frameRef.PreydatorWasShown ~= nil then
-            frameRef.PreydatorWasShown = nil
+        elseif wasShown ~= nil then
+            WIDGET_SUPPRESSION_WAS_SHOWN[frameRef] = nil
         end
     end
 
@@ -2389,11 +2516,11 @@ local function ShouldSuppressEncounterNow()
 end
 
 local function EnsureWidgetSuppressionHook(frameRef)
-    if not frameRef or frameRef.PreydatorSuppressionHooked or not frameRef.HookScript then
+    if not frameRef or WIDGET_SUPPRESSION_HOOKED[frameRef] or not frameRef.HookScript then
         return
     end
 
-    frameRef.PreydatorSuppressionHooked = true
+    WIDGET_SUPPRESSION_HOOKED[frameRef] = true
     frameRef:HookScript("OnShow", function(self)
         local ok = pcall(function()
             if ShouldSuppressEncounterNow() then
@@ -2405,6 +2532,33 @@ local function EnsureWidgetSuppressionHook(frameRef)
             -- Keep gameplay stable even if Blizzard updates widget internals.
         end
     end)
+end
+
+local function EnsurePreyHuntMixinSuppressionHook()
+    if preyHuntMixinHooked then
+        return
+    end
+
+    local mixin = _G.UIWidgetTemplatePreyHuntProgressMixin
+    if not mixin or type(hooksecurefunc) ~= "function" then
+        return
+    end
+
+    -- hooksecurefunc fires AFTER Blizzard's Setup() runs AnimIn/ResetAnimState/SetAlpha(1)/Show(),
+    -- so re-hiding here lands at the right point in the sequence.
+    local ok = pcall(hooksecurefunc, mixin, "Setup", function(self)
+        if ShouldSuppressEncounterNow() then
+            if type(self.Hide) == "function" then
+                pcall(self.Hide, self)
+            elseif type(self.SetAlpha) == "function" then
+                pcall(self.SetAlpha, self, 0)
+            end
+        end
+    end)
+
+    if ok then
+        preyHuntMixinHooked = true
+    end
 end
 
 ShouldSuppressDefaultPreyEncounter = function()
@@ -2554,20 +2708,20 @@ local function TryGetWidgetFrameByID(container, widgetID)
 end
 
 local function AttachStageFourMapClick(frameRef)
-    if not frameRef or frameRef.PreydatorStageFourClickHooked then
+    if not frameRef or STAGE_FOUR_CLICK_HOOKED[frameRef] then
         return
     end
 
-    frameRef.PreydatorStageFourClickHooked = true
+    STAGE_FOUR_CLICK_HOOKED[frameRef] = true
     if frameRef.RegisterForDrag then
-        frameRef:RegisterForDrag()
+        pcall(frameRef.RegisterForDrag, frameRef)
     end
     if frameRef.EnableMouse then
-        frameRef:EnableMouse(true)
+        pcall(frameRef.EnableMouse, frameRef, true)
     end
 
     if frameRef.HookScript then
-        frameRef:HookScript("OnMouseUp", function(_, button)
+        pcall(frameRef.HookScript, frameRef, "OnMouseUp", function(_, button)
             if button ~= "LeftButton" then
                 return
             end
@@ -2817,6 +2971,28 @@ ApplyDefaultPreyIconVisibility = function()
 end
 
 NormalizeSoundSettings = function()
+    settings.soundsEnabled = settings.soundsEnabled ~= false
+
+    local rawChannel = settings.soundChannel
+    if type(rawChannel) ~= "string" then
+        rawChannel = ""
+    end
+
+    local channelLower = string.lower(rawChannel)
+    if channelLower == "master" then
+        settings.soundChannel = "Master"
+    elseif channelLower == "sfx" then
+        settings.soundChannel = "SFX"
+    elseif channelLower == "dialog" then
+        settings.soundChannel = "Dialog"
+    elseif channelLower == "ambience" then
+        settings.soundChannel = "Ambience"
+    else
+        settings.soundChannel = "SFX"
+    end
+
+    settings.soundEnhance = Clamp(math.floor((tonumber(settings.soundEnhance) or 0) + 0.5), 0, 100)
+
     if type(settings.soundFileNames) ~= "table" then
         settings.soundFileNames = {}
     end
@@ -2989,7 +3165,7 @@ local function FindPreyWidgetProgressState(activeQuestID)
     local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
         or PREY_WIDGET_TYPE
     local shownStateShown = (Enum and Enum.WidgetShownState and Enum.WidgetShownState.Shown) or WIDGET_SHOWN
-    local fallbackState, fallbackTooltip, fallbackPct = nil, nil, nil
+    local fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = nil, nil, nil, nil
 
     for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
         local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
@@ -3008,14 +3184,14 @@ local function FindPreyWidgetProgressState(activeQuestID)
                         if IsValidQuestID(activeQuestID) then
                             local widgetQuestID = ExtractWidgetQuestID(info)
                             if widgetQuestID == activeQuestID then
-                                return info.progressState, info.tooltip, pct
+                                return info.progressState, info.tooltip, pct, numericWidgetID
                             end
 
                             if widgetQuestID == nil and fallbackState == nil then
-                                fallbackState, fallbackTooltip, fallbackPct = info.progressState, info.tooltip, pct
+                                fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = info.progressState, info.tooltip, pct, numericWidgetID
                             end
                         else
-                            return info.progressState, info.tooltip, pct
+                            return info.progressState, info.tooltip, pct, numericWidgetID
                         end
                     end
                 end
@@ -3024,7 +3200,7 @@ local function FindPreyWidgetProgressState(activeQuestID)
     end
 
     if IsValidQuestID(activeQuestID) then
-        return fallbackState, fallbackTooltip, fallbackPct
+        return fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID
     end
 
     return nil, nil, nil
@@ -3033,6 +3209,7 @@ end
 local function ResetStateForNewQuest(questID)
     if state.activeQuestID ~= questID then
         state.activeQuestID = questID
+        state.lastPreyWidgetID = nil
         state.lastNotifiedPreyEndQuestID = nil
         state.progressState = nil
         state.progressPercent = nil
@@ -3120,14 +3297,17 @@ local function UpdatePreyState()
         end
     end
 
-    local newProgressState, tooltipText, newProgressPercent = nil, nil, nil
+    local newProgressState, tooltipText, newProgressPercent, detectedWidgetID = nil, nil, nil, nil
     if hasActiveQuest then
-        newProgressState, tooltipText, newProgressPercent = FindPreyWidgetProgressState(questID)
+        newProgressState, tooltipText, newProgressPercent, detectedWidgetID = FindPreyWidgetProgressState(questID)
     end
     local hasWidgetData = newProgressState ~= nil
 
     if hasWidgetData then
         state.lastWidgetSeenAt = now
+        if detectedWidgetID then
+            state.lastPreyWidgetID = detectedWidgetID
+        end
     end
 
     local effectiveQuestID = hasActiveQuest and questID or nil
@@ -3378,6 +3558,300 @@ function Preydator:ApplyRuntimeSettings(nextSettings, emitProfileHook, refreshUi
     end
 end
 
+-- ===========================================================================
+-- Addon Launcher: Minimap Button + Blizzard Addon Compartment
+-- Decoupled from CurrencyTracker — the launcher persists regardless of which
+-- feature modules are enabled.
+-- ===========================================================================
+
+local LAUNCHER_ICON_PATH = "Interface\\AddOns\\Preydator\\media\\Preydator_64.png"
+local LAUNCHER_LDB_NAME  = "Preydator"
+
+local launcherMinimapButton
+local launcherLdbObject
+local launcherLdbRegistered = false
+
+local function LauncherAtan2(y, x)
+    if math.atan2 then
+        return math.atan2(y, x)
+    end
+    if x > 0 then
+        return math.atan(y / x)
+    end
+    if x < 0 then
+        if y >= 0 then
+            return math.atan(y / x) + math.pi
+        end
+        return math.atan(y / x) - math.pi
+    end
+    if y > 0 then
+        return math.pi / 2
+    end
+    if y < 0 then
+        return -math.pi / 2
+    end
+    return 0
+end
+
+local function LauncherNormalizeAngle(angle)
+    if type(angle) ~= "number" then
+        return 225
+    end
+    angle = angle % 360
+    if angle < 0 then
+        angle = angle + 360
+    end
+    return angle
+end
+
+local function GetLauncherSettings()
+    local api = Preydator and Preydator.API
+    if not api or type(api.GetSettings) ~= "function" then
+        return nil
+    end
+    return api.GetSettings()
+end
+
+local function HandleAddonLauncherClick(mouseButton)
+    local ct = Preydator and Preydator.GetModule and Preydator:GetModule("CurrencyTracker")
+    if mouseButton == "LeftButton" then
+        if ct and type(ct.ToggleCurrencyWindow) == "function" then
+            ct:ToggleCurrencyWindow()
+        end
+        return
+    end
+    if mouseButton == "RightButton" and _G.IsShiftKeyDown and _G.IsShiftKeyDown() then
+        OpenOptionsPanel()
+        return
+    end
+    if mouseButton == "RightButton" then
+        if ct and type(ct.ToggleWarbandWindow) == "function" then
+            ct:ToggleWarbandWindow()
+        end
+    end
+end
+
+local function UpdateLauncherMinimapPosition()
+    if not launcherMinimapButton then
+        return
+    end
+    local addonSettings = GetLauncherSettings()
+    local angle = 225
+    if addonSettings and type(addonSettings.currencyMinimap) == "table" and type(addonSettings.currencyMinimap.minimapPos) == "number" then
+        angle = addonSettings.currencyMinimap.minimapPos
+    elseif addonSettings and type(addonSettings.currencyMinimapAngle) == "number" then
+        angle = addonSettings.currencyMinimapAngle
+    end
+    angle = LauncherNormalizeAngle(angle)
+    local minimap = _G.Minimap
+    if not minimap then
+        return
+    end
+    local radians = math.rad(angle)
+    local minimapRadius = math.min(minimap:GetWidth(), minimap:GetHeight()) / 2
+    local radius = minimapRadius + 8
+    local x = math.cos(radians) * radius
+    local y = math.sin(radians) * radius
+    launcherMinimapButton:ClearAllPoints()
+    launcherMinimapButton:SetPoint("CENTER", minimap, "CENTER", x, y)
+end
+
+local function UpdateLauncherButtonVisibility()
+    local addonSettings = GetLauncherSettings()
+    if not addonSettings then
+        return
+    end
+    local LibStub = _G.LibStub
+    local dbIcon = LibStub and LibStub:GetLibrary("LibDBIcon-1.0", true)
+    local hide = addonSettings.currencyMinimapButton == false
+    if dbIcon and launcherLdbRegistered then
+        if hide then
+            dbIcon:Hide(LAUNCHER_LDB_NAME)
+        else
+            dbIcon:Show(LAUNCHER_LDB_NAME)
+        end
+    elseif launcherMinimapButton then
+        launcherMinimapButton:SetShown(not hide)
+    end
+end
+
+-- Expose so Settings.lua can trigger an immediate visibility update when the
+-- "Disable Minimap Button" checkbox is toggled.
+Preydator.UpdateLauncherButtonVisibility = UpdateLauncherButtonVisibility
+
+local function EnsureLauncherLdb()
+    if launcherLdbObject then
+        return launcherLdbObject
+    end
+    local LibStub = _G.LibStub
+    local ldb = LibStub and LibStub:GetLibrary("LibDataBroker-1.1", true)
+    if not ldb then
+        return nil
+    end
+    local L = _G.PreydatorL or setmetatable({}, { __index = function(_, k) return k end })
+    launcherLdbObject = ldb:NewDataObject(LAUNCHER_LDB_NAME, {
+        type = "launcher",
+        text = "Preydator",
+        icon = LAUNCHER_ICON_PATH,
+        OnClick = function(_, mouseButton)
+            HandleAddonLauncherClick(mouseButton)
+        end,
+        OnTooltipShow = function(tooltip)
+            if not tooltip then
+                return
+            end
+            tooltip:AddLine("Preydator")
+            tooltip:AddLine(L["Left Click: Toggle Currency Window"], 1, 1, 1)
+            tooltip:AddLine(L["Right Click: Toggle Warband Window"], 1, 1, 1)
+            tooltip:AddLine(L["Shift + Right Click: Open Options"], 1, 1, 1)
+        end,
+    })
+    return launcherLdbObject
+end
+
+local function EnsureLauncherMinimapButton()
+    local addonSettings = GetLauncherSettings()
+    local LibStub = _G.LibStub
+    local dbIcon = LibStub and LibStub:GetLibrary("LibDBIcon-1.0", true)
+    local ldb = LibStub and LibStub:GetLibrary("LibDataBroker-1.1", true)
+    if addonSettings and type(addonSettings.currencyMinimap) ~= "table" then
+        addonSettings.currencyMinimap = {}
+    end
+    if ldb and addonSettings then
+        EnsureLauncherLdb()
+    end
+    if dbIcon and launcherLdbObject and addonSettings then
+        if not launcherLdbRegistered then
+            dbIcon:Register(LAUNCHER_LDB_NAME, launcherLdbObject, addonSettings.currencyMinimap)
+            launcherLdbRegistered = true
+        end
+        return nil
+    end
+    if launcherLdbObject then
+        return nil
+    end
+    if launcherMinimapButton or not _G.Minimap then
+        return launcherMinimapButton
+    end
+
+    local button = CreateFrame("Button", "PreydatorMinimapButton", _G.Minimap)
+    button:SetSize(32, 32)
+    button:SetFrameStrata("MEDIUM")
+    button:SetFrameLevel(8)
+    button:EnableMouse(true)
+    button:SetMovable(true)
+    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    button:RegisterForDrag("LeftButton")
+
+    local background = button:CreateTexture(nil, "BACKGROUND")
+    background:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+    background:SetSize(20, 20)
+    background:SetPoint("CENTER", button, "CENTER", 0, 0)
+
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture(LAUNCHER_ICON_PATH)
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", button, "CENTER", 0, 0)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    local border = button:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetSize(53, 53)
+    border:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+
+    button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+    button:SetScript("OnClick", function(self, mouseButton)
+        if self.wasDragged then
+            return
+        end
+        HandleAddonLauncherClick(mouseButton)
+    end)
+
+    button:SetScript("OnDragStart", function(self)
+        self.dragging = true
+        self.wasDragged = false
+        self:SetScript("OnUpdate", function(s)
+            local minimap = _G.Minimap
+            if not minimap then
+                return
+            end
+            local mx, my = _G.GetCursorPosition()
+            local scale = UIParent:GetEffectiveScale()
+            mx, my = mx / scale, my / scale
+            local cx, cy = minimap:GetCenter()
+            if not cx or not cy then
+                return
+            end
+            local angle = LauncherNormalizeAngle(math.deg(LauncherAtan2(my - cy, mx - cx)))
+            local s_settings = GetLauncherSettings()
+            if s_settings then
+                if type(s_settings.currencyMinimap) ~= "table" then
+                    s_settings.currencyMinimap = {}
+                end
+                s_settings.currencyMinimap.minimapPos = angle
+                s_settings.currencyMinimapAngle = angle
+            end
+            s.wasDragged = true
+            UpdateLauncherMinimapPosition()
+        end)
+    end)
+
+    button:SetScript("OnDragStop", function(self)
+        self.dragging = nil
+        self:SetScript("OnUpdate", nil)
+        C_Timer.After(0.05, function()
+            if launcherMinimapButton then
+                launcherMinimapButton.wasDragged = nil
+            end
+        end)
+    end)
+
+    launcherMinimapButton = button
+    UpdateLauncherMinimapPosition()
+    -- Apply initial hide state from settings
+    UpdateLauncherButtonVisibility()
+    return button
+end
+
+function _G.Preydator_OnAddonCompartmentClick(_, buttonName)
+    HandleAddonLauncherClick(buttonName or "LeftButton")
+end
+
+function _G.Preydator_OnAddonCompartmentEnter()
+    local gt = _G.GameTooltip
+    if not gt or type(gt.SetOwner) ~= "function" then
+        return
+    end
+    local L = _G.PreydatorL or setmetatable({}, { __index = function(_, k) return k end })
+    gt:SetOwner(_G.AddonCompartmentFrame or UIParent, "ANCHOR_LEFT")
+    gt:ClearLines()
+    gt:AddLine("Preydator")
+    gt:AddLine(L["Left Click: Toggle Currency Window"], 1, 1, 1)
+    gt:AddLine(L["Right Click: Toggle Warband Window"], 1, 1, 1)
+    gt:AddLine(L["Shift + Right Click: Open Options"], 1, 1, 1)
+    gt:Show()
+end
+
+function _G.Preydator_OnAddonCompartmentLeave()
+    local gt = _G.GameTooltip
+    if gt and type(gt.Hide) == "function" then
+        gt:Hide()
+    end
+end
+
+-- Minimal module so the launcher button is created on PLAYER_LOGIN,
+-- independent of whether CurrencyTracker is enabled.
+local AddonLauncherModule = {}
+Preydator:RegisterModule("AddonLauncher", AddonLauncherModule)
+
+function AddonLauncherModule:OnEvent(event)
+    if event == "PLAYER_LOGIN" then
+        EnsureLauncherMinimapButton()
+        UpdateLauncherMinimapPosition()
+    end
+end
+
 local function OnAddonLoaded()
     _G.PreydatorDB = _G.PreydatorDB or {}
     local profileSystem = Preydator and Preydator.ProfileSystem
@@ -3396,7 +3870,13 @@ local function OnAddonLoaded()
 
     state.pollingActive = false
 
+    EnsurePreyHuntMixinSuppressionHook()
     RunModuleHook("OnAddonLoaded")
+end
+
+local function OnBlizzardWidgetsLoaded()
+    EnsurePreyHuntMixinSuppressionHook()
+    ApplyDefaultPreyIconVisibility()
 end
 
 local function AddCheckbox(parent, label, x, y, getter, setter)
@@ -4577,6 +5057,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
             preyProgressFinal = PREY_PROGRESS_FINAL,
             activePreyQuestCacheSeconds = ACTIVE_PREY_QUEST_CACHE_SECONDS,
             onAddonLoaded = OnAddonLoaded,
+            onBlizzardWidgetsLoaded = OnBlizzardWidgetsLoaded,
             ensureOptionsPanel = EnsureOptionsPanel,
             handleSlashCommand = HandleSlashCommand,
             applyBarSettings = ApplyBarSettings,
@@ -4589,6 +5070,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
             armQuestListenBurst = ArmQuestListenBurst,
             getCurrentActivePreyQuestCached = GetCurrentActivePreyQuestCached,
             updatePreyState = UpdatePreyState,
+            isRelevantWidgetUpdateEvent = IsRelevantWidgetUpdateEvent,
             isValidQuestID = IsValidQuestID,
             isRestrictedInstanceForPreyBar = IsRestrictedInstanceForPreyBar,
             getTime = GetTime,
@@ -4607,6 +5089,9 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
         EnsureOptionsPanel()
         SlashCmdList["PREYDATOR"] = HandleSlashCommand
     end
+    if event == "ADDON_LOADED" and arg1 == "Blizzard_UIWidgets" then
+        OnBlizzardWidgetsLoaded()
+    end
 end)
 
 -- Register addon events once during file load so we do not call RegisterEvent from runtime initialization paths.
@@ -4621,7 +5106,6 @@ frame:RegisterEvent("CHAT_MSG_MONSTER_SAY")
 frame:RegisterEvent("CHAT_MSG_MONSTER_YELL")
 frame:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
 frame:RegisterEvent("RAID_BOSS_EMOTE")
-frame:RegisterEvent("UNIT_AURA")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
 frame:RegisterEvent("QUEST_DETAIL")
 frame:RegisterEvent("QUEST_ACCEPTED")

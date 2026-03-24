@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.1.1 - 2026-03-24
+
+### Changed
+- Bloody Command alert routing is now chat-only. Removed legacy aura-path event handling (`UNIT_AURA`) and related stale routing branches from core event fanout.
+- Updated release behavior notes for Bloody Command to reflect Astalor chat-line trigger flow instead of player-aura trigger flow.
+- Added an Advanced settings toggle for verbose Bloody Command diagnostics (`Verbose Bloody Command Debug`) so gate-detail logs can be enabled only when needed.
+- Added `Category-koKR` metadata to the addon TOC so Korean clients get localized category labeling in addon lists.
+
+### Fixed
+- Fixed Blizzard widget taint propagation by removing Preydator-owned state writes on Blizzard widget frames. Suppression/click-hook state now uses addon-owned weak-key tables, preventing protected layout comparisons from seeing tainted frame tables.
+- Hardened sound playback against invalid or legacy saved sound-channel values. Sound channel values are now normalized to canonical keys and playback can fall back to safe channels when needed.
+- Added sound-channel self-heal on successful playback so recovered channel values are persisted back into settings.
+- Added defensive sound-settings normalization for `soundsEnabled`, `soundChannel`, and `soundEnhance` so stale or malformed persisted values no longer block playback paths.
+- Reduced Bloody Command debug noise during normal debug sessions by keeping one concise trigger line and gating verbose gate/skip traces behind `debugBloodyCommand`.
+- Preserved fail-open safety for unknown widget payload shapes so client-specific event argument differences do not regress prey updates.
+- Fixed Hunt Tracker achievement cache rebuild crash caused by helper-order resolution in Lua (`IsAchievementCompletedCached` resolving as nil during first rebuild pass).
+- Fixed Hunt Tracker achievement matching for criteria that do not expose a quest `assetID`, including `Prey: Chasing Death (Nightmare)`.
+- Fixed grouped Hunt Tracker weeks being capped to 12 visible rows; the row pool now accommodates grouped headers plus all weekly hunts.
+- Fixed stale warband prey-availability counts after weekly/server reset by keying fallback reset detection off Blizzard's server weekly reset timer and clearing HuntScanner availability caches during reconciliation before snapshots are refreshed.
+
+### Added
+- Added full `koKR` localization coverage from community contribution (issue #12), including settings tabs/sections, sound controls, hints, module labels, and tooltip strings.
+- Added hunt-integrated achievement guidance in Hunt Tracker rows. Prey hunts now show an achievement signal badge when they advance tracked incomplete achievements, with optional `xN` count and mouseover names.
+- Added Achievements tab options to control hunt-row achievement display (`Show Achievement Signals`, `Achievement Signal Style`, and `Show Achievement Names On Mouseover`).
+- Added the Hunt Table display-style selector for achievement signals so the hunt list can be set to icon-only, text-only, or both from the Hunt Table tab.
+- Added persistent earned-achievement caching for Hunt Tracker guidance. Once a tracked achievement is earned, it is stored in SavedVariables and skipped on future rebuilds because it cannot be earned twice.
+- Added `Clear Achievement Cache` to the Defaults/Advanced maintenance section so achievement guidance cache can be reset without wiping all settings.
+
+### Performance
+- Added early `UPDATE_UI_WIDGET` relevance filtering in core event runtime so non-prey widget payloads short-circuit before noisy module fanout and prey-state refresh work.
+- Added tracked prey widget ID state to improve relevance checks across differing widget update payload formats.
+- Narrowed widget set ID scanning in `GetCandidateWidgetSetIDs` to query `GetPowerBarWidgetSetID` first (the known home of the prey hunt widget) and only fall back to the other three set IDs if the PowerBar set yields nothing. This reduces the number of protected secret-number values touched per widget scan cycle.
+- Restored lean Hunt Tracker noisy-event gating so an active prey quest no longer keeps `QUEST_LOG_UPDATE` and widget listeners alive while the Hunt Table panel is closed.
+
+### Cleanup
+- Removed stale Bloody Command aura helpers/state from `Core/Alerts.lua` (`BLOODY_COMMAND_SPELL_IDS`, aura scan helpers/state) after chat-trigger validation.
+- Removed stale `UNIT_AURA` prey-signal references/comments from `Core/EventRuntime.lua` and main event registration in `Preydator.lua`.
+- Finalized EventRuntime stale-signal cleanup notes/comments for chat-owned alert routing.
+- Added `UIWidgetTemplatePreyHuntProgressMixin.Setup` mixin hook (via `hooksecurefunc`) as the primary prey-icon suppression path. The hook fires after Blizzard's `AnimIn`/`ResetAnimState`/show sequence completes, targeting only the exact mixin type and eliminating the need to scan and manipulate arbitrary container frame globals for suppression.
+- Added `Blizzard_UIWidgets` sub-addon readiness guard: `ADDON_LOADED` now watches for `Blizzard_UIWidgets` and triggers the mixin suppression hook and first icon-visibility pass only after widget APIs are confirmed present.
+
 ## 2.1.0 - 2026-03-23
 
 ### Changed
@@ -153,16 +194,10 @@
 
 ## 2.0.0 - 2026-03-19
 
-### Added
-- Introduced module runtime controls for `Bar`, `Sounds`, `Currency`, `Hunt Table`, and `Warband` with reload-aware settings UX.
 - Added module-aware settings gating across top-strip controls, Sounds page, Panels page sections, Currency matrix controls, and Theme controls.
 - Added quest-focused inspect diagnostics (`/pd inspectquest`, `/pd inspectquestbug`, `/pd inspectquestboth`) with BugSack-compatible payload output.
-
 ### Changed
 - Updated one-time splash/version gate to `2.0.0` and refreshed release messaging.
-- First-load guidance now explicitly states the bar starts unlocked and should be locked in Options after positioning.
-- Updated release metadata/version touchpoints (`Preydator.toc`, build script default, README, CurseForge description).
-
 ### Fixed
 - Bar module gating now correctly preserves disabled state (removed false-to-true coercion paths) and enforces disabled behavior at runtime.
 - Sounds module disable now blocks stage/ambush playback at core sound entry path (`TryPlaySound`).

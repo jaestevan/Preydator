@@ -27,6 +27,7 @@ function SettingsRuntime:NormalizeTransientSettings(settings)
 
     -- Legacy migration: persisted debug/session flag should never stay true in SavedVariables.
     settings.forceShowBar = false
+    settings.debugBloodyCommand = settings.debugBloodyCommand == true
 end
 
 function SettingsRuntime:NormalizeProgressSettings(settings, ctx)

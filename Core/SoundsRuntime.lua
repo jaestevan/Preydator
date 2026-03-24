@@ -273,9 +273,64 @@ function SoundsRuntime:TryPlaySound(path, ignoreSoundToggle, settings, ctx)
         return false
     end
 
-    local channel = (settings and settings.soundChannel) or "SFX"
-    local willPlay = playSoundFile(path, channel)
-    Log("path=" .. tostring(path) .. " | channel=" .. tostring(channel) .. " | ignoreToggle=" .. tostring(ignoreSoundToggle) .. " | result=" .. tostring(willPlay))
+    local requestedChannel = (settings and settings.soundChannel) or "SFX"
+    local channel = requestedChannel
+    if type(channel) ~= "string" or channel == "" then
+        channel = "SFX"
+    end
+
+    local lowerChannel = string.lower(channel)
+    if lowerChannel == "master" then
+        channel = "Master"
+    elseif lowerChannel == "sfx" then
+        channel = "SFX"
+    elseif lowerChannel == "dialog" then
+        channel = "Dialog"
+    elseif lowerChannel == "ambience" then
+        channel = "Ambience"
+    end
+
+    local validChannels = {
+        Master = true,
+        SFX = true,
+        Dialog = true,
+        Ambience = true,
+    }
+
+    local channelsToTry = {}
+    local seenChannels = {}
+    local function pushChannel(candidate)
+        if type(candidate) ~= "string" or candidate == "" or seenChannels[candidate] then
+            return
+        end
+        seenChannels[candidate] = true
+        channelsToTry[#channelsToTry + 1] = candidate
+    end
+
+    if validChannels[channel] then
+        pushChannel(channel)
+    else
+        -- Self-heal corrupted/legacy values by trying canonical channels.
+        pushChannel("SFX")
+        pushChannel("Master")
+    end
+
+    local willPlay = false
+    local usedChannel = nil
+    for _, tryChannel in ipairs(channelsToTry) do
+        local result = playSoundFile(path, tryChannel)
+        Log("path=" .. tostring(path) .. " | channel=" .. tostring(tryChannel) .. " | ignoreToggle=" .. tostring(ignoreSoundToggle) .. " | result=" .. tostring(result))
+        if result then
+            willPlay = true
+            usedChannel = tryChannel
+            break
+        end
+    end
+
+    if willPlay and usedChannel and settings and settings.soundChannel ~= usedChannel then
+        settings.soundChannel = usedChannel
+    end
+
     if willPlay then
         local enhance = (settings and tonumber(settings.soundEnhance)) or 0
         local timerAfter = ctx and ctx.timerAfter
@@ -284,7 +339,7 @@ function SoundsRuntime:TryPlaySound(path, ignoreSoundToggle, settings, ctx)
             for i = 1, extraPlays do
                 local delay = i * 0.03
                 timerAfter(delay, function()
-                    playSoundFile(path, channel)
+                    playSoundFile(path, usedChannel or channel)
                 end)
             end
             if extraPlays > 0 then

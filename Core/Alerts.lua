@@ -6,15 +6,8 @@ local Preydator = _G.Preydator or addonTable
 local Alerts = {}
 Preydator:RegisterModule("Alerts", Alerts)
 
-local BLOODY_COMMAND_SPELL_IDS = {
-    [1245779] = true,
-    [1245767] = true,
-}
 local BLOODY_COMMAND_CHAT_PHRASE = "kill for me. now!"
 local BLOODY_COMMAND_CHAT_SOURCE = "astalor bloodsworn"
-
-local bloodyAuraActive = false
-local bloodyAuraSpellID = nil
 
 local function IsAmbushRuntimeEnabled(api)
     local runtime = type(api.GetModuleRuntimeState) == "function" and api.GetModuleRuntimeState() or nil
@@ -75,6 +68,23 @@ local function AddAlertsDebugLog(api, message)
     if type(api.AddDebugLog) == "function" then
         api.AddDebugLog("BloodyCommand", tostring(message), true)
     end
+end
+
+local function IsBloodyVerboseDebugEnabled(api)
+    if type(api.GetSettings) ~= "function" then
+        return false
+    end
+
+    local settings = api.GetSettings()
+    return type(settings) == "table" and settings.debugBloodyCommand == true
+end
+
+local function AddBloodyCommandLog(api, message, verboseOnly)
+    if verboseOnly and not IsBloodyVerboseDebugEnabled(api) then
+        return
+    end
+
+    AddAlertsDebugLog(api, message)
 end
 
 local function IsAmbushSystemMessage(ctx, message, sender)
@@ -203,112 +213,42 @@ local function HandleBloodyCommandChat(api, event, message, sender)
         and type(ctx.isRestrictedInstanceForPreyBar) == "function"
         and ctx.isRestrictedInstanceForPreyBar() == true
 
-    AddAlertsDebugLog(api,
+    AddBloodyCommandLog(api,
         "chat matched"
             .. " | event=" .. tostring(event)
             .. " | sender=" .. tostring(sender)
-            .. " | message=" .. tostring(message)
             .. " | stage=" .. tostring(ctx and ctx.state and ctx.state.stage)
-            .. " | difficulty=" .. tostring(ctx and ctx.state and ctx.state.preyTargetDifficulty)
+            .. " | difficulty=" .. tostring(ctx and ctx.state and ctx.state.preyTargetDifficulty),
+        false
+    )
+
+    AddBloodyCommandLog(api,
+        "chat gate details"
+            .. " | message=" .. tostring(message)
             .. " | runtimeEnabled=" .. tostring(runtimeEnabled)
             .. " | restricted=" .. tostring(inRestrictedInstance)
-            .. " | stageAndDifficultyMatch=" .. tostring(stageAndDifficultyMatch)
+            .. " | stageAndDifficultyMatch=" .. tostring(stageAndDifficultyMatch),
+        true
     )
 
     if inRestrictedInstance then
-        AddAlertsDebugLog(api, "chat ignored: restricted instance")
+        AddBloodyCommandLog(api, "chat ignored: restricted instance", true)
         return
     end
 
     if not runtimeEnabled then
-        AddAlertsDebugLog(api, "chat ignored: runtime disabled")
+        AddBloodyCommandLog(api, "chat ignored: runtime disabled", true)
         return
     end
 
     if not stageAndDifficultyMatch then
-        AddAlertsDebugLog(api, "chat ignored: stage/difficulty gate failed")
+        AddBloodyCommandLog(api, "chat ignored: stage/difficulty gate failed", true)
         return
     end
 
     if type(api.TriggerBloodyCommandAlert) == "function" then
         api.TriggerBloodyCommandAlert(nil, sender, event)
     end
-end
-
-local function FindPlayerBloodyCommandSpellID()
-    local auraUtil = _G.AuraUtil
-    if auraUtil and type(auraUtil.FindAuraBySpellID) == "function" then
-        for spellID in pairs(BLOODY_COMMAND_SPELL_IDS) do
-            local auraName = auraUtil.FindAuraBySpellID(spellID, "player", "HARMFUL")
-            if auraName then
-                return spellID
-            end
-        end
-    end
-
-    if type(_G.UnitAura) == "function" then
-        for index = 1, 40 do
-            local _, _, _, _, _, _, _, _, _, auraSpellID = _G.UnitAura("player", index, "HARMFUL")
-            auraSpellID = tonumber(auraSpellID)
-            if rawget(BLOODY_COMMAND_SPELL_IDS, auraSpellID) ~= nil then
-                return auraSpellID
-            end
-        end
-    end
-
-    return nil
-end
-
-local function HandleBloodyCommandUnitAura(api)
-    local activeSpellID = FindPlayerBloodyCommandSpellID()
-
-    if activeSpellID then
-        local ctx = ResolveAlertContext(api)
-        local stageAndDifficultyMatch = IsBloodyCommandStageAndDifficultyMatch(ctx)
-        local runtimeEnabled = IsBloodyRuntimeEnabled(api)
-        local shouldBeActive = stageAndDifficultyMatch and runtimeEnabled
-        local changed = (not bloodyAuraActive) or (bloodyAuraSpellID ~= activeSpellID)
-
-        AddAlertsDebugLog(api,
-            "aura scan"
-                .. " | spellID=" .. tostring(activeSpellID)
-                .. " | stage=" .. tostring(ctx and ctx.state and ctx.state.stage)
-                .. " | difficulty=" .. tostring(ctx and ctx.state and ctx.state.preyTargetDifficulty)
-                .. " | runtimeEnabled=" .. tostring(runtimeEnabled)
-                .. " | stageAndDifficultyMatch=" .. tostring(stageAndDifficultyMatch)
-                .. " | changed=" .. tostring(changed)
-        )
-
-        if shouldBeActive and changed and type(api.TriggerBloodyCommandAlert) == "function" then
-            api.TriggerBloodyCommandAlert(activeSpellID, nil, "UNIT_AURA")
-        end
-
-        if shouldBeActive then
-            bloodyAuraActive = true
-            bloodyAuraSpellID = activeSpellID
-        else
-            if bloodyAuraActive and type(api.ClearBloodyCommandAlert) == "function" then
-                api.ClearBloodyCommandAlert()
-                if type(api.UpdateBarDisplay) == "function" then
-                    api.UpdateBarDisplay()
-                end
-            end
-            bloodyAuraActive = false
-            bloodyAuraSpellID = nil
-        end
-
-        return
-    end
-
-    if bloodyAuraActive and type(api.ClearBloodyCommandAlert) == "function" then
-        api.ClearBloodyCommandAlert()
-        if type(api.UpdateBarDisplay) == "function" then
-            api.UpdateBarDisplay()
-        end
-    end
-
-    bloodyAuraActive = false
-    bloodyAuraSpellID = nil
 end
 
 function Alerts:OnEvent(event, arg1, arg2)
@@ -328,12 +268,4 @@ function Alerts:OnEvent(event, arg1, arg2)
         return
     end
 
-    if event == "UNIT_AURA" and arg1 == "player" then
-        HandleBloodyCommandUnitAura(api)
-        return
-    end
-
-    if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
-        HandleBloodyCommandUnitAura(api)
-    end
 end

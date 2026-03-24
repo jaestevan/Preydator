@@ -47,47 +47,18 @@ No-findings corrections versus earlier scan:
   - Defined at HuntScanner.lua
   - Used at HuntScanner.lua, HuntScanner.lua, HuntScanner.lua.
 
-Remaining scope:
-1. Monitor one test cycle with legacy inspect path gated; if no regressions, remove dead implementation body in a follow-up cleanup.
-2. Start 200-local-cap safety cleanup in `Preydator.lua`:
-  - Prioritize moving inspect/report assembly and slash parsing helpers into dedicated module-level files.
-  - Prefer shared API helpers over per-chunk local helper duplication.
-  - Keep behavior identical while reducing local-variable pressure to avoid recurring cap collisions.
-
-Release packaging cleanup (new):
-1. High severity: Bloody Command still carries stale aura path after chat trigger validation.
-- Evidence:
-  - `Preydator.lua` still registers `UNIT_AURA` for core frame events.
-  - `Core/Alerts.lua` still contains aura-only helpers and state (`BLOODY_COMMAND_SPELL_IDS`, `FindPlayerBloodyCommandSpellID`, `HandleBloodyCommandUnitAura`, `bloodyAuraActive`, `bloodyAuraSpellID`).
-  - Live validation confirmed chat trigger path is firing correctly for Astalor line.
-- Why this matters:
-  - Extra aura scanning and event traffic are now redundant and add avoidable CPU overhead.
-  - Keeping two trigger systems increases drift/debug complexity for future fixes.
-- Cleanup action:
-  - Remove `UNIT_AURA` registration from `Preydator.lua`.
-  - Remove aura-specific Bloody Command helpers/state from `Core/Alerts.lua`.
-  - Keep Bloody Command on chat-only trigger path.
-
-2. Medium severity: Bloody Command debug output is too verbose for normal debug sessions.
-- Evidence:
-  - Current logs emit full gate detail on every matched line plus skip-reason traces.
-- Why this matters:
-  - Useful for investigation, but noisy for routine testing and release verification.
-- Cleanup action:
-  - Keep one concise trigger log line by default.
-  - Add dedicated `debugBloodyCommand` setting to enable verbose gate-detail lines only when needed.
-  - Add matching Settings UI toggle and localization key.
-
-3. Low severity: EventRuntime still references `UNIT_AURA` as a prey signal event.
-- Evidence:
-  - `Core/EventRuntime.lua` includes `UNIT_AURA` in prey-signal event set and notes aura ownership comments.
-- Why this matters:
-  - Once aura trigger is removed, this becomes stale routing documentation/logic.
-- Cleanup action:
-  - Remove `UNIT_AURA` signal references/comments from `Core/EventRuntime.lua` during chat-only migration.
-
-Optimization note:
-- Core is stable enough to run a surgical optimization pass focused on compile safety + maintainability, not feature behavior changes.
+Current status:
+1. Bloody Command migration and stale routing cleanup are complete:
+  - Chat-only trigger path is active.
+  - Aura-path registration/helpers were removed.
+  - EventRuntime stale signal references were removed.
+2. Bloody Command debug-noise controls are complete:
+  - `debugBloodyCommand` setting exists.
+  - Advanced UI toggle exists.
+  - Verbose gate/skip logs are gated behind the toggle.
+3. Widget-update early-filter optimization is complete:
+  - Relevance gate for `UPDATE_UI_WIDGET` is active.
+  - Tracked prey widget ID is persisted in runtime state for filtering.
 
 Completed in this cycle:
 1. Removed unused CurrencyTracker OpenColorPicker helper.
@@ -95,3 +66,45 @@ Completed in this cycle:
 3. Refactored Clamp/RoundToStep/NormalizeSliderValue to shared Preydator.API helpers and adopted in Settings/EditMode.
 4. Consolidated CreateCheckbox/CreateSlider into shared Preydator.API helpers and adopted in Settings/EditMode.
 5. Gated legacy Preydator.lua inspect path for medium-risk safety testing.
+6. Removed Bloody Command UNIT_AURA path and stale aura state/helpers; chat trigger is now the only alert source.
+7. Added `debugBloodyCommand` setting, Advanced UI toggle, and verbose-log gating so default debug output stays concise.
+8. Completed EventRuntime stale-signal cleanup for chat-only Bloody Command by removing aura references and aligning event-ownership comments.
+9. Added widget-update early-filter optimization: irrelevant `UPDATE_UI_WIDGET` payloads now short-circuit before module fanout and prey-state refresh work.
+
+Regression test matrix (minimum):
+1. In-zone prey active, stages 1->4 progression updates normally.
+2. Delve entry while prey active: no hunt scanner panel churn, no prey alert spam.
+3. Delve exit: prey state refresh resumes correctly.
+4. Bloody Command line from Astalor at Nightmare stage 2+: alert fires.
+5. Same line at stage 1 or non-Nightmare: alert does not fire.
+6. Debug on, `debugBloodyCommand` off: concise logging only.
+7. Debug on, `debugBloodyCommand` on: verbose gate logs present.
+
+In-game validation run sheet (manual):
+- Build target: `2.1.1`
+- Test date: `__________`
+- Tester/client locale: `__________`
+
+1. Case 1 (in-zone stage progression): `PASS | FAIL | N/A`  Notes: `__Pass________`
+2. Case 2 (delve entry/no churn): `PASS | FAIL | N/A`  Notes: `_Pass_________`
+3. Case 3 (delve exit recovery): `PASS | FAIL | N/A`  Notes: `_Pass_________`
+4. Case 4 (Bloody Command valid gate): `PASS | FAIL | N/A`  Notes: `__________`
+5. Case 5 (Bloody Command invalid gate): `PASS | FAIL | N/A`  Notes: `__________`
+6. Case 6 (`debugBloodyCommand` off concise logs): `PASS | FAIL | N/A`  Notes: `__________`
+7. Case 7 (`debugBloodyCommand` on verbose logs): `PASS | FAIL | N/A`  Notes: `__________`
+8. Case 8 (PowerBar widget set ID narrowing — widget detection valid): With prey active and `disableDefaultPreyIcon` off, confirm the bar still shows correct stage progression. No Lua errors expected. If BugSack is clean and bar progresses, set ID narrowing is working. `PASS | FAIL | N/A`  Notes: `__________`
+9. Case 9 (Mixin suppression hook — hide Blizzard prey icon): Enable `Disable Default Prey Icon`, activate a prey quest, and verify the Blizzard prey icon widget on the PowerBar is hidden/invisible. Re-enable the setting and confirm it re-appears. `PASS | FAIL | N/A`  Notes: `__________`
+10. Case 10 (`Blizzard_UIWidgets` readiness gate): On a fresh login with no previously-cached widget data, verify that prey widget detection and icon suppression both take effect within the first `UPDATE_UI_WIDGET` tick after entering the prey zone. No "attempt to index nil" or "GetAllWidgetsBySetID" errors in BugSack. `PASS | FAIL | N/A`  Notes: `__________`
+
+Quick execution notes:
+1. Toggle debug in `Options > Addons > Preydator > Default Settings > Debug`.
+2. Keep `Enable Debug` on for cases 6-7.
+3. Flip `Verbose Bloody Command Debug` off/on between cases 6 and 7.
+4. Capture one BugSack report or chat-log snippet for case 7 to confirm gated verbose lines.
+5. For case 8, watch BugSack through one full prey-widget scan cycle (enter zone, open world map).
+6. For case 9, toggle `Disable Default Prey Icon` on/off while prey is active. Blizzard icon should hide immediately and re-appear on disable.
+7. For case 10, test immediately after `/reload` with prey active to confirm no nil-widget errors before the first widget refresh.
+
+Remaining follow-up:
+1. Fill the manual run-sheet results above and summarize pass/fail in `CHANGELOG.md` before packaging.
+2. Revisit legacy inspect path cleanup after one stable validation cycle.
