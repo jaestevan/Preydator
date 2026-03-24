@@ -54,6 +54,38 @@ Remaining scope:
   - Prefer shared API helpers over per-chunk local helper duplication.
   - Keep behavior identical while reducing local-variable pressure to avoid recurring cap collisions.
 
+Release packaging cleanup (new):
+1. High severity: Bloody Command still carries stale aura path after chat trigger validation.
+- Evidence:
+  - `Preydator.lua` still registers `UNIT_AURA` for core frame events.
+  - `Core/Alerts.lua` still contains aura-only helpers and state (`BLOODY_COMMAND_SPELL_IDS`, `FindPlayerBloodyCommandSpellID`, `HandleBloodyCommandUnitAura`, `bloodyAuraActive`, `bloodyAuraSpellID`).
+  - Live validation confirmed chat trigger path is firing correctly for Astalor line.
+- Why this matters:
+  - Extra aura scanning and event traffic are now redundant and add avoidable CPU overhead.
+  - Keeping two trigger systems increases drift/debug complexity for future fixes.
+- Cleanup action:
+  - Remove `UNIT_AURA` registration from `Preydator.lua`.
+  - Remove aura-specific Bloody Command helpers/state from `Core/Alerts.lua`.
+  - Keep Bloody Command on chat-only trigger path.
+
+2. Medium severity: Bloody Command debug output is too verbose for normal debug sessions.
+- Evidence:
+  - Current logs emit full gate detail on every matched line plus skip-reason traces.
+- Why this matters:
+  - Useful for investigation, but noisy for routine testing and release verification.
+- Cleanup action:
+  - Keep one concise trigger log line by default.
+  - Add dedicated `debugBloodyCommand` setting to enable verbose gate-detail lines only when needed.
+  - Add matching Settings UI toggle and localization key.
+
+3. Low severity: EventRuntime still references `UNIT_AURA` as a prey signal event.
+- Evidence:
+  - `Core/EventRuntime.lua` includes `UNIT_AURA` in prey-signal event set and notes aura ownership comments.
+- Why this matters:
+  - Once aura trigger is removed, this becomes stale routing documentation/logic.
+- Cleanup action:
+  - Remove `UNIT_AURA` signal references/comments from `Core/EventRuntime.lua` during chat-only migration.
+
 Optimization note:
 - Core is stable enough to run a surgical optimization pass focused on compile safety + maintainability, not feature behavior changes.
 

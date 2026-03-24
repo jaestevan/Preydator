@@ -1565,7 +1565,7 @@ local function BuildBarPage(owner, parent)
 
     local content = CreateFrame("Frame", nil, contentViewport)
     content:SetPoint("TOPLEFT", contentViewport, "TOPLEFT", 0, 0)
-    content:SetSize(PANEL_WIDTH - 160, 900)
+    content:SetSize(PANEL_WIDTH - 160, 960)
     contentViewport:SetScrollChild(content)
 
     local contentScrollSlider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
@@ -1758,6 +1758,14 @@ local function BuildBarPage(owner, parent)
         api.RequestBarRefresh()
     end))
 
+    local progressSegmentsDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -406, L["Progress Segments"], 170, PROGRESS_SEGMENT_OPTIONS, function()
+        return db.progressSegments
+    end, function(key)
+        db.progressSegments = key
+        api.NormalizeProgressSettings()
+        api.RequestBarRefresh()
+    end))
+
     CreateSectionTitle(content, BAR_RIGHT_X, -264, L["Percent Display"])
     local percentDisplayDropdown = TrackBarControl(CreateDropdown(content, BAR_RIGHT_X, -294, L["Percent Display"], 170, PERCENT_DISPLAY_OPTIONS, function()
         return db.percentDisplay
@@ -1852,29 +1860,29 @@ local function BuildBarPage(owner, parent)
         api.ApplyBarSettings()
     end))
 
-    CreateSectionTitle(content, COLUMN_LEFT_X, -608, L["Vertical Dimensions"])
-    local verticalFillDirectionDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -638, L["Vertical Fill Direction"], 170, VERTICAL_FILL_DIRECTION_OPTIONS, function()
+    CreateSectionTitle(content, COLUMN_LEFT_X, -620, L["Vertical Dimensions"])
+    local verticalFillDirectionDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -650, L["Vertical Fill Direction"], 170, VERTICAL_FILL_DIRECTION_OPTIONS, function()
         return db.verticalFillDirection
     end, function(key)
         db.verticalFillDirection = key
         api.NormalizeDisplaySettings()
         api.RequestBarRefresh()
     end))
-    local verticalTextSideDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -694, L["Vertical Text Side"], 170, VERTICAL_SIDE_OPTIONS, function()
+    local verticalTextSideDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -706, L["Vertical Text Side"], 170, VERTICAL_SIDE_OPTIONS, function()
         return db.verticalTextSide
     end, function(key)
         db.verticalTextSide = key
         api.NormalizeDisplaySettings()
         api.RequestBarRefresh()
     end))
-    local verticalTextAlignDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -750, L["Vertical Text Alignment"], 170, VERTICAL_TEXT_ALIGN_OPTIONS, function()
+    local verticalTextAlignDropdown = TrackBarControl(CreateDropdown(content, COLUMN_LEFT_X, -762, L["Vertical Text Alignment"], 170, VERTICAL_TEXT_ALIGN_OPTIONS, function()
         return db.verticalTextAlign
     end, function(key)
         db.verticalTextAlign = key
         api.NormalizeDisplaySettings()
         api.RequestBarRefresh()
     end))
-    local verticalTickPercentCheck = TrackBarControl(CreateCheckbox(content, COLUMN_LEFT_X, -806, L["Show Percentage at Tick Marks"], function()
+    local verticalTickPercentCheck = TrackBarControl(CreateCheckbox(content, COLUMN_LEFT_X, -818, L["Show Percentage at Tick Marks"], function()
         return db.showVerticalTickPercent == true
     end, function(value)
         db.showVerticalTickPercent = value and true or false
@@ -1883,13 +1891,13 @@ local function BuildBarPage(owner, parent)
     end))
 
     local verticalNote = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    verticalNote:SetPoint("TOPLEFT", content, "TOPLEFT", BAR_RIGHT_X, -608)
+    verticalNote:SetPoint("TOPLEFT", content, "TOPLEFT", BAR_RIGHT_X, -620)
     verticalNote:SetWidth(260)
     verticalNote:SetJustifyH("LEFT")
     verticalNote:SetWordWrap(true)
     verticalNote:SetText(L["HINT_VERTICAL_PERCENT_OFFSET"])
 
-    local textOffsetSlider = TrackBarControl(CreateSlider(content, BAR_RIGHT_X, -638, L["Vertical Text Offset"], 2, 60, 1, function()
+    local textOffsetSlider = TrackBarControl(CreateSlider(content, BAR_RIGHT_X, -650, L["Vertical Text Offset"], 2, 60, 1, function()
         return db.verticalTextOffset or 10
     end, function(value)
         db.verticalTextOffset = math.floor(value + 0.5)
@@ -1898,7 +1906,7 @@ local function BuildBarPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    local percentOffsetSlider = TrackBarControl(CreateSlider(content, BAR_RIGHT_X, -694, L["Vertical Percent Offset"], 2, 60, 1, function()
+    local percentOffsetSlider = TrackBarControl(CreateSlider(content, BAR_RIGHT_X, -706, L["Vertical Percent Offset"], 2, 60, 1, function()
         return db.verticalPercentOffset or 10
     end, function(value)
         db.verticalPercentOffset = math.floor(value + 0.5)
@@ -1907,14 +1915,14 @@ local function BuildBarPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    local verticalPercentSideDropdown = TrackBarControl(CreateDropdown(content, BAR_RIGHT_X, -750, L["Vertical Percent Tick Mark"], 170, VERTICAL_PERCENT_SIDE_OPTIONS, function()
+    local verticalPercentSideDropdown = TrackBarControl(CreateDropdown(content, BAR_RIGHT_X, -806, L["Vertical Percent Tick Mark"], 170, VERTICAL_PERCENT_SIDE_OPTIONS, function()
         return db.verticalPercentSide
     end, function(key)
         db.verticalPercentSide = key
         api.NormalizeDisplaySettings()
         api.RequestBarRefresh()
     end))
-    local verticalPercentDisplayDropdown = TrackBarControl(CreateDropdown(content, BAR_RIGHT_X, -806, L["Vertical Percent Display"], 170, VERTICAL_PERCENT_DISPLAY_OPTIONS, function()
+    local verticalPercentDisplayDropdown = TrackBarControl(CreateDropdown(content, BAR_RIGHT_X, -862, L["Vertical Percent Display"], 170, VERTICAL_PERCENT_DISPLAY_OPTIONS, function()
         return db.verticalPercentDisplay
     end, function(key)
         db.verticalPercentDisplay = key
@@ -1948,6 +1956,9 @@ local function BuildBarPage(owner, parent)
         end
         if percentDisplayDropdown.PreydatorSetEnabled then
             percentDisplayDropdown:PreydatorSetEnabled(barEnabled and isHorizontal)
+        end
+        if progressSegmentsDropdown.PreydatorSetEnabled then
+            progressSegmentsDropdown:PreydatorSetEnabled(barEnabled)
         end
         if sparkCheck.PreydatorSetEnabled then
             sparkCheck:PreydatorSetEnabled(barEnabled and isHorizontal)
@@ -2242,6 +2253,13 @@ local function BuildTextPage(owner, parent)
         api.NormalizeLabelSettings()
         api.UpdateBarDisplay()
     end))
+    RegisterRefresher(owner, CreateTextInput(parent, COLUMN_LEFT_X, -326, L["Bloody Command Prefix"], 220, function()
+        return db.bloodyCommandPrefix or ""
+    end, function(value)
+        db.bloodyCommandPrefix = value
+        api.NormalizeLabelSettings()
+        api.UpdateBarDisplay()
+    end))
 
     CreateSectionTitle(parent, TEXT_RIGHT_X, -10, L["Suffix Labels"])
     for stageIndex = 1, constants.MAX_STAGE do
@@ -2269,12 +2287,21 @@ local function BuildTextPage(owner, parent)
         api.NormalizeLabelSettings()
         api.UpdateBarDisplay()
     end))
-    CreateActionButton(parent, TEXT_RIGHT_X, -338, 180, L["Restore Default Names"], function()
+    RegisterRefresher(owner, CreateTextInput(parent, TEXT_RIGHT_X, -326, L["Bloody Command Suffix"], 220, function()
+        return db.bloodyCommandSuffix or ""
+    end, function(value)
+        db.bloodyCommandSuffix = value
+        api.NormalizeLabelSettings()
+        api.UpdateBarDisplay()
+    end))
+    CreateActionButton(parent, TEXT_RIGHT_X, -372, 180, L["Restore Default Names"], function()
         for stageIndex = 1, constants.MAX_STAGE do
             db.stageLabels[stageIndex] = defaults.stageLabels[stageIndex] or ""
         end
         db.outOfZoneLabel = constants.DEFAULT_OUT_OF_ZONE_LABEL
         db.ambushCustomText = ""
+        db.bloodyCommandPrefix = ""
+        db.bloodyCommandSuffix = ""
         api.NormalizeLabelSettings()
         api.UpdateBarDisplay()
         owner:RefreshControls()
@@ -2291,12 +2318,99 @@ local function BuildSoundsPage(owner, parent)
         return RegisterRefresher(owner, control)
     end
 
-    TrackSoundsControl(CreateCheckbox(parent, COLUMN_LEFT_X, -10, L["Enable Sounds"], function()
-        return db.soundsEnabled ~= false
+    local contentViewport = CreateFrame("ScrollFrame", nil, parent)
+    contentViewport:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+    contentViewport:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -20, 0)
+    contentViewport:EnableMouseWheel(true)
+
+    local content = CreateFrame("Frame", nil, contentViewport)
+    content:SetPoint("TOPLEFT", contentViewport, "TOPLEFT", 0, 0)
+    content:SetSize(PANEL_WIDTH - 160, 560)
+    contentViewport:SetScrollChild(content)
+
+    local contentScrollSlider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
+    contentScrollSlider:SetOrientation("VERTICAL")
+    contentScrollSlider:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -2, -24)
+    contentScrollSlider:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -2, 26)
+    contentScrollSlider:SetWidth(16)
+    contentScrollSlider:SetMinMaxValues(0, 100)
+    contentScrollSlider:SetValueStep(1)
+    contentScrollSlider:SetObeyStepOnDrag(true)
+    contentScrollSlider:SetValue(0)
+    if contentScrollSlider.Low then contentScrollSlider.Low:Hide() end
+    if contentScrollSlider.High then contentScrollSlider.High:Hide() end
+    if contentScrollSlider.Text then contentScrollSlider.Text:Hide() end
+
+    local function UpdateSoundsScrollBounds()
+        contentViewport:UpdateScrollChildRect()
+        local currentValue = contentScrollSlider:GetValue() or 0
+        local scrollRange = contentViewport:GetVerticalScrollRange() or 0
+        if scrollRange < 0 then
+            scrollRange = 0
+        end
+
+        contentScrollSlider:SetMinMaxValues(0, scrollRange)
+        local clamped = Clamp(currentValue, 0, scrollRange)
+        contentScrollSlider:SetValue(clamped)
+        contentViewport:SetVerticalScroll(clamped)
+
+        if scrollRange <= 0 then
+            contentScrollSlider:SetEnabled(false)
+            contentScrollSlider:SetAlpha(0.35)
+        else
+            contentScrollSlider:SetEnabled(true)
+            contentScrollSlider:SetAlpha(1)
+        end
+    end
+
+    contentScrollSlider:SetScript("OnValueChanged", function(self, value)
+        local _, maxValue = self:GetMinMaxValues()
+        local clamped = Clamp(value or 0, 0, maxValue or 0)
+        contentViewport:SetVerticalScroll(clamped)
+    end)
+
+    contentViewport:SetScript("OnMouseWheel", function(_, delta)
+        local minValue, maxValue = contentScrollSlider:GetMinMaxValues()
+        local currentValue = contentScrollSlider:GetValue() or 0
+        local step = 24
+        local nextValue = Clamp(currentValue - (delta * step), minValue or 0, maxValue or 0)
+        contentScrollSlider:SetValue(nextValue)
+    end)
+
+    if parent.HookScript then
+        parent:HookScript("OnShow", UpdateSoundsScrollBounds)
+        parent:HookScript("OnSizeChanged", UpdateSoundsScrollBounds)
+    end
+    if content.HookScript then
+        content:HookScript("OnSizeChanged", UpdateSoundsScrollBounds)
+    end
+
+    TrackSoundsControl(CreateCheckbox(content, COLUMN_LEFT_X, -10, L["Ambush sound alert"], function()
+        return db.ambushSoundEnabled ~= false
     end, function(value)
-        db.soundsEnabled = value and true or false
+        db.ambushSoundEnabled = value and true or false
+        api.NormalizeAmbushSettings()
     end))
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -38, L["Sound Channel"], 170, function()
+    TrackSoundsControl(CreateCheckbox(content, COLUMN_RIGHT_X, -10, L["Ambush visual alert"], function()
+        return db.ambushVisualEnabled ~= false
+    end, function(value)
+        db.ambushVisualEnabled = value and true or false
+        api.NormalizeAmbushSettings()
+    end))
+    TrackSoundsControl(CreateCheckbox(content, COLUMN_LEFT_X, -38, L["Bloody Command sound alert"], function()
+        return db.bloodyCommandSoundEnabled ~= false
+    end, function(value)
+        db.bloodyCommandSoundEnabled = value and true or false
+        api.NormalizeAmbushSettings()
+    end))
+    TrackSoundsControl(CreateCheckbox(content, COLUMN_RIGHT_X, -38, L["Bloody Command visual alert"], function()
+        return db.bloodyCommandVisualEnabled ~= false
+    end, function(value)
+        db.bloodyCommandVisualEnabled = value and true or false
+        api.NormalizeAmbushSettings()
+    end))
+
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -82, L["Sound Channel"], 170, function()
         return CHANNEL_OPTIONS
     end, function()
         return db.soundChannel
@@ -2304,8 +2418,9 @@ local function BuildSoundsPage(owner, parent)
         db.soundChannel = key
         api.NormalizeSoundSettings()
     end))
-    CreateSectionTitle(parent, COLUMN_LEFT_X, -66, L["Sound Selection"])
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -96, string.format(L["Stage %d Sound"], 1), 170, function()
+
+    CreateSectionTitle(content, COLUMN_LEFT_X, -130, L["Sound Selection"])
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -160, string.format(L["Stage %d Sound"], 1), 170, function()
         return api.BuildSoundDropdownOptions()
     end, function()
         return db.stageSounds[1]
@@ -2313,7 +2428,7 @@ local function BuildSoundsPage(owner, parent)
         db.stageSounds[1] = key
         api.NormalizeSoundSettings()
     end))
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -150, string.format(L["Stage %d Sound"], 2), 170, function()
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -214, string.format(L["Stage %d Sound"], 2), 170, function()
         return api.BuildSoundDropdownOptions()
     end, function()
         return db.stageSounds[2]
@@ -2321,7 +2436,7 @@ local function BuildSoundsPage(owner, parent)
         db.stageSounds[2] = key
         api.NormalizeSoundSettings()
     end))
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -204, string.format(L["Stage %d Sound"], 3), 170, function()
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -268, string.format(L["Stage %d Sound"], 3), 170, function()
         return api.BuildSoundDropdownOptions()
     end, function()
         return db.stageSounds[3]
@@ -2329,7 +2444,7 @@ local function BuildSoundsPage(owner, parent)
         db.stageSounds[3] = key
         api.NormalizeSoundSettings()
     end))
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -258, string.format(L["Stage %d Sound"], 4), 170, function()
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -322, string.format(L["Stage %d Sound"], 4), 170, function()
         return api.BuildSoundDropdownOptions()
     end, function()
         return db.stageSounds[4]
@@ -2337,7 +2452,8 @@ local function BuildSoundsPage(owner, parent)
         db.stageSounds[4] = key
         api.NormalizeSoundSettings()
     end))
-    TrackSoundsControl(CreateDropdown(parent, COLUMN_LEFT_X, -312, L["Ambush Sound"], 170, function()
+
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -376, L["Ambush Sound"], 170, function()
         return api.BuildSoundDropdownOptions()
     end, function()
         return db.ambushSoundPath
@@ -2345,12 +2461,20 @@ local function BuildSoundsPage(owner, parent)
         db.ambushSoundPath = key
         api.NormalizeAmbushSettings()
     end))
-    TrackSoundsControl(CreateSlider(parent, COLUMN_LEFT_X, -366, L["Enhance Sounds"], 0, 100, 5, function() return db.soundEnhance or 0 end, function(value)
+    TrackSoundsControl(CreateDropdown(content, COLUMN_LEFT_X, -430, L["Bloody Command Sound"], 170, function()
+        return api.BuildSoundDropdownOptions()
+    end, function()
+        return db.bloodyCommandSoundPath
+    end, function(key)
+        db.bloodyCommandSoundPath = key
+        api.NormalizeAmbushSettings()
+    end))
+    TrackSoundsControl(CreateSlider(content, COLUMN_LEFT_X, -484, L["Enhance Sounds"], 0, 100, 5, function() return db.soundEnhance or 0 end, function(value)
         db.soundEnhance = math.floor(value + 0.5)
     end, function(value) return tostring(math.floor(value + 0.5)) end))
 
-    CreateSectionTitle(parent, COLUMN_RIGHT_X, -10, L["Custom Files / Tests"])
-    local customSoundInput = CreateTextInput(parent, COLUMN_RIGHT_X, -40, L["Custom Sound File"], 220, function()
+    CreateSectionTitle(content, COLUMN_RIGHT_X, -102, L["Custom Files / Tests"])
+    local customSoundInput = CreateTextInput(content, COLUMN_RIGHT_X, -132, L["Custom Sound File"], 220, function()
         return ""
     end, function()
     end)
@@ -2361,7 +2485,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     customSoundInput:SetText("")
 
-    local addFileButton = CreateActionButton(parent, COLUMN_RIGHT_X, -86, 105, L["Add File"], function()
+    local addFileButton = CreateActionButton(content, COLUMN_RIGHT_X, -178, 105, L["Add File"], function()
         local ok, message = api.AddSoundFileName(customSoundInput:GetText())
         if ok then
             customSoundInput:SetText("")
@@ -2373,7 +2497,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(addFileButton)
 
-    local removeFileButton = CreateActionButton(parent, COLUMN_RIGHT_X + 115, -86, 105, L["Remove File"], function()
+    local removeFileButton = CreateActionButton(content, COLUMN_RIGHT_X + 115, -178, 105, L["Remove File"], function()
         local ok, message = api.RemoveSoundFileName(customSoundInput:GetText())
         if ok then
             customSoundInput:SetText("")
@@ -2385,7 +2509,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(removeFileButton)
 
-    local testStage1Button = CreateActionButton(parent, COLUMN_RIGHT_X, -130, 140, string.format(L["Test Stage %d"], 1), function()
+    local testStage1Button = CreateActionButton(content, COLUMN_RIGHT_X, -222, 140, string.format(L["Test Stage %d"], 1), function()
         local path = api.ResolveStageSoundPath(1)
         if not path then
             print(string.format(L["Preydator: No stage %d sound configured."], 1))
@@ -2397,7 +2521,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(testStage1Button)
 
-    local testStage2Button = CreateActionButton(parent, COLUMN_RIGHT_X, -160, 140, string.format(L["Test Stage %d"], 2), function()
+    local testStage2Button = CreateActionButton(content, COLUMN_RIGHT_X, -252, 140, string.format(L["Test Stage %d"], 2), function()
         local path = api.ResolveStageSoundPath(2)
         if not path then
             print(string.format(L["Preydator: No stage %d sound configured."], 2))
@@ -2409,7 +2533,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(testStage2Button)
 
-    local testStage3Button = CreateActionButton(parent, COLUMN_RIGHT_X, -190, 140, string.format(L["Test Stage %d"], 3), function()
+    local testStage3Button = CreateActionButton(content, COLUMN_RIGHT_X, -282, 140, string.format(L["Test Stage %d"], 3), function()
         local path = api.ResolveStageSoundPath(3)
         if not path then
             print(string.format(L["Preydator: No stage %d sound configured."], 3))
@@ -2421,7 +2545,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(testStage3Button)
 
-    local testStage4Button = CreateActionButton(parent, COLUMN_RIGHT_X, -220, 140, string.format(L["Test Stage %d"], 4), function()
+    local testStage4Button = CreateActionButton(content, COLUMN_RIGHT_X, -312, 140, string.format(L["Test Stage %d"], 4), function()
         local path = api.ResolveStageSoundPath(4)
         if not path then
             print(string.format(L["Preydator: No stage %d sound configured."], 4))
@@ -2433,7 +2557,7 @@ local function BuildSoundsPage(owner, parent)
     end)
     TrackSoundsControl(testStage4Button)
 
-    local testAmbushButton = CreateActionButton(parent, COLUMN_RIGHT_X, -250, 140, L["Test Ambush"], function()
+    local testAmbushButton = CreateActionButton(content, COLUMN_RIGHT_X, -342, 140, L["Test Ambush"], function()
         local path = api.ResolveAmbushSoundPath()
         if not path then
             print("Preydator: No ambush sound configured.")
@@ -2444,8 +2568,19 @@ local function BuildSoundsPage(owner, parent)
         end
     end)
     TrackSoundsControl(testAmbushButton)
-    local note = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    note:SetPoint("TOPLEFT", parent, "TOPLEFT", COLUMN_RIGHT_X, -286)
+    local testBloodyCommandButton = CreateActionButton(content, COLUMN_RIGHT_X, -372, 140, L["Test Bloody Command"], function()
+        local path = api.ResolveBloodyCommandSoundPath()
+        if not path then
+            print("Preydator: No Bloody Command sound configured.")
+            return
+        end
+        if not api.PlayTestSound(path) then
+            print("Preydator: Bloody Command sound file failed to play. Ensure this file exists as .ogg: " .. tostring(path))
+        end
+    end)
+    TrackSoundsControl(testBloodyCommandButton)
+    local note = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    note:SetPoint("TOPLEFT", content, "TOPLEFT", COLUMN_RIGHT_X, -412)
     note:SetWidth(250)
     note:SetJustifyH("LEFT")
     note:SetWordWrap(true)
@@ -2460,8 +2595,11 @@ local function BuildSoundsPage(owner, parent)
                 end
             end
             note:SetAlpha(soundsEnabled and 1 or 0.45)
+            UpdateSoundsScrollBounds()
         end,
     })
+
+    UpdateSoundsScrollBounds()
 end
 
 local function BuildThemePage(owner, parent)
@@ -3223,6 +3361,9 @@ local function BuildAdvancedPage(owner, parent)
         db.ambushSoundEnabled = defaults.ambushSoundEnabled
         db.ambushVisualEnabled = defaults.ambushVisualEnabled
         db.ambushSoundPath = defaults.ambushSoundPath
+        db.bloodyCommandSoundEnabled = defaults.bloodyCommandSoundEnabled
+        db.bloodyCommandVisualEnabled = defaults.bloodyCommandVisualEnabled
+        db.bloodyCommandSoundPath = defaults.bloodyCommandSoundPath
         db.soundFileNames = {}
         for _, fileName in ipairs(constants.DEFAULT_SOUND_FILENAMES) do
             db.soundFileNames[#db.soundFileNames + 1] = fileName

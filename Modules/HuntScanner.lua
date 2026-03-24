@@ -195,18 +195,36 @@ IsInRestrictedInstance = function()
         return false
     end
     local ok, inInstance, instanceType = pcall(IsInInstance)
-    if not ok then
-        return false
+    if ok and inInstance then
+        return instanceType == "pvp"
+            or instanceType == "arena"
+            or instanceType == "party"
+            or instanceType == "raid"
+            or instanceType == "scenario"
+            or instanceType == "delve"
     end
-    if not inInstance then
-        return false
+
+    -- Fallback for short transition windows where IsInInstance lags behind map state.
+    if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
+        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+        local okNumericMapID, playerMapID = pcall(function()
+            return tonumber(rawPlayerMapID)
+        end)
+        playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
+        if playerMapID then
+            local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
+            mapInfo = okMapInfo and mapInfo or nil
+            local okMapType, mapType = pcall(function()
+                return tonumber(mapInfo and mapInfo.mapType)
+            end)
+            mapType = (okMapType and mapType and mapType > 0) and mapType or nil
+            if mapType == 4 then
+                return true
+            end
+        end
     end
-    return instanceType == "pvp"
-        or instanceType == "arena"
-        or instanceType == "party"
-        or instanceType == "raid"
-        or instanceType == "scenario"
-        or instanceType == "delve"
+
+    return false
 end
 
 IsOptionsPreviewVisible = function()

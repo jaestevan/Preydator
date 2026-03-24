@@ -4,7 +4,7 @@
 ## Author: RagingAltoholic
 ## Category-enUS: Quests
 ## Category-zhCN: 任务
-## Version: 2.0.8
+## Version: 2.1.0
 ## AddonCompartmentFunc: Preydator_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: Preydator_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: Preydator_OnAddonCompartmentLeave
@@ -25,7 +25,15 @@ Locales\zhCN.lua
 Locales\zhTW.lua
 
 Preydator.lua
+Core\SettingsRuntime.lua
+Core\SoundsRuntime.lua
+Core\PreyContextRuntime.lua
+Core\BarRuntime.lua
+Core\EventRuntime.lua
+Core\DebugRuntime.lua
 Modules\ProfileManager.lua
+Modules\SlashCommands.lua
+Core\Alerts.lua
 Modules\Settings.lua
 Modules\EditMode.lua
 Modules\DebugInspect.lua

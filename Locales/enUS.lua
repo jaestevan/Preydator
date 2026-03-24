@@ -14,6 +14,7 @@
 ---- Stage defaults (displayed in the progress bar; players can override in Options > Text)
   L["No Sign in These Fields"]   = ""
   L["AMBUSH"]                    = ""
+  L["Bloody Command"]            = ""
   L["Scent in the Wind"]         = ""
   L["Blood in the Shadows"]      = ""
   L["Echoes of the Kill"]        = ""
@@ -56,6 +57,8 @@
   L["Enable sounds"]                     = ""
   L["Ambush sound alert"]                = ""
   L["Ambush visual alert"]               = ""
+  L["Bloody Command sound alert"]        = ""
+  L["Bloody Command visual alert"]       = ""
   L["Show tick marks"]                   = ""
   L["Display Spark Line"]                = ""
   L["Link border color to fill"]         = ""
@@ -84,6 +87,7 @@
   L["Title Font"]               = ""
   L["Percent Font"]             = ""
   L["Ambush Sound"]             = ""
+  L["Bloody Command Sound"]     = ""
 
 ---- Slider labels
   L["Scale"]                 = ""
@@ -121,6 +125,7 @@
   L["Remove File"]             = ""
   L["Test Stage %d"]           = ""   -- e.g. "Test Stage 1"
   L["Test Ambush"]             = ""
+  L["Test Bloody Command"]     = ""
   L["Show What's New"]         = ""
 
 ---- Dropdown option values — Texture
@@ -226,8 +231,8 @@
   L["Preydator Currency"]        = ""
   L["Preydator Warband"]         = ""
   L["Currency Tracker"]          = ""
-  L["Preydator Updates: New in 2.0.0"] = ""
-  L["WHATS_NEW_BODY"]            = "Preydator 2.0.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."
+  L["Preydator Updates: New in 2.1.0"] = ""
+  L["WHATS_NEW_BODY"]            = "Preydator 2.1.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."
   L["Got It"]                    = ""
   L["Open Settings"]             = ""
   L["Toggle Tracker"]            = ""
@@ -315,4 +320,4 @@ L["HINT_AUDIO_SLIDER"] = "Slider values can be dragged or typed directly. Custom
 L["HINT_ADVANCED_NOTES"] = "Existing installs keep their current saved values. New settings are only applied when a key is missing in PreydatorDB. This panel replaces the old long-form options page but uses the same database. The Inspect feature is compatible with BugSack."
 L["HINT_PANEL_SUBTITLE"] = "Tabbed options layout with two-column pages. Slider values can be dragged or typed directly."
 L["HINT_EDITMODE_SUBTITLE"] = "Quick layout controls while Blizzard Edit Mode is open. Full Options can be found in Options > Addons > Preydator."
-L["WHATS_NEW_BODY"] = "Preydator 2.0.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."
+L["WHATS_NEW_BODY"] = "Preydator 2.1.0 is live.\n\n- New module system lets you disable Bar, Sounds, Currency, Hunt Table, and Warband paths independently\n- Module-aware settings now gray out automatically and require reload only when changed\n- Currency and Warband windows now force-close when their modules are disabled\n- Bar-only routing improved: prey zone fallback now uses quest map presence when zone IDs are unavailable\n- CPU optimizations tighten zone caching and skip unnecessary refresh routes\n\nFirst load starts with the bar unlocked so you can place it quickly. Use Lock Frame in Options when you are done positioning."

@@ -166,7 +166,7 @@ local WARBAND_MAX_FONT = 24
 local WARBAND_DEFAULT_SCALE = 1.00
 local WARBAND_MIN_SCALE = 0.70
 local WARBAND_MAX_SCALE = 1.40
-local CURRENCY_WHATS_NEW_VERSION = "2.0.0"
+local CURRENCY_WHATS_NEW_VERSION = "2.1.0"
 local MINIMAP_ICON_PATH = "Interface\\AddOns\\Preydator\\media\\Preydator_64.png"
 local LDB_LAUNCHER_NAME = "PreydatorCurrencyTracker"
 
@@ -1654,7 +1654,7 @@ local function EnsureCurrencyWhatsNewFrame()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -18)
-    title:SetText(L["Preydator Updates: New in 2.0.0"])
+    title:SetText(L["Preydator Updates: New in 2.1.0"])
     SetTextColor(title, COLOR_GOLD)
 
     local body = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")

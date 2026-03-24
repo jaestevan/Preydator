@@ -15,19 +15,10 @@ local C_Map = _G["C_Map"]
 local C_SuperTrack = _G["C_SuperTrack"]
 local GetQuestProgressBarPercent = _G.GetQuestProgressBarPercent
 local UIParent = _G.UIParent
-local UiMapPoint = _G.UiMapPoint
 local GetTime = _G.GetTime
-local GetCursorPosition = _G.GetCursorPosition
-local GetZoneText = _G.GetZoneText
 local IsInInstance = _G.IsInInstance
 local SlashCmdList = _G["SlashCmdList"]
 local Settings = _G["Settings"]
-local geterrorhandler = _G.geterrorhandler
-local EnumerateFrames = _G.EnumerateFrames
-local OpenQuestMap = _G.OpenQuestMap
-local ToggleWorldMap = _G.ToggleWorldMap
-local QuestMapFrame_OpenToQuestDetails = _G.QuestMapFrame_OpenToQuestDetails
-local collectgarbage = _G.collectgarbage
 local UIDropDownMenu_Initialize = _G.UIDropDownMenu_Initialize
 local UIDropDownMenu_CreateInfo = _G.UIDropDownMenu_CreateInfo
 local UIDropDownMenu_SetWidth = _G.UIDropDownMenu_SetWidth
@@ -156,7 +147,6 @@ local DEFAULTS = {
     verticalScale = 0.9,
     fontSize = 12,
     locked = true,
-    forceShowBar = false,
     onlyShowInPreyZone = false,
     disableDefaultPreyIcon = false,
     showInEditMode = true,
@@ -173,6 +163,8 @@ local DEFAULTS = {
     outOfZonePrefix = "",
     ambushLabel = DEFAULT_AMBUSH_LABEL,
     ambushPrefix = "",
+    bloodyCommandPrefix = "",
+    bloodyCommandSuffix = "",
     ambushCustomText = "",
     stageLabels = {
         [1] = DEFAULT_STAGE_LABELS[1],
@@ -264,6 +256,9 @@ local DEFAULTS = {
     ambushSoundEnabled = true,
     ambushVisualEnabled = true,
     ambushSoundPath = KILL_SOUND_PATH,
+    bloodyCommandSoundEnabled = true,
+    bloodyCommandVisualEnabled = true,
+    bloodyCommandSoundPath = KILL_SOUND_PATH,
     showTicks = true,
     showSparkLine = false,
     tickLayerMode = LAYER_MODE_ABOVE,
@@ -407,6 +402,8 @@ local UpdateBarDisplay
 local ApplyBarSettings
 local ApplyDefaultPreyIconVisibility
 local TryOpenPreyQuestOnMap
+local BarRuntimeApplyHandler
+local BarRuntimeUpdateHandler
 
 local function RunModuleHook(hookName, ...)
     for _, module in pairs(Preydator.modules) do
@@ -441,6 +438,9 @@ local state = {
     ambushAlertUntil = 0,
     lastAmbushSoundAt = 0,
     lastAmbushSystemMessage = nil,
+    bloodyCommandAlertUntil = 0,
+    bloodyCommandSourceName = nil,
+    lastBloodyCommandSpellID = nil,
     lastNotifiedPreyEndQuestID = nil,
     questListenUntil = 0,
     cachedActivePreyQuestID = nil,
@@ -657,49 +657,31 @@ local function Round(value)
     return math.ceil(value - 0.5)
 end
 
-local function SyncBarPointToBackup()
-    if not settings or type(settings.point) ~= "table" then
-        return
+local function GetRuntimeModule(moduleName)
+    if not (Preydator and type(Preydator.GetModule) == "function") then
+        return nil
     end
 
-    local x = tonumber(settings.point.x)
-    local y = tonumber(settings.point.y)
-    if x == nil or y == nil then
-        return
+    local runtime = Preydator:GetModule(moduleName)
+    if type(runtime) == "table" then
+        return runtime
     end
 
-    settings.barPointX = Round(x)
-    settings.barPointY = Round(y)
-end
-
-local function RestoreBarPointFromBackup()
-    if not settings then
-        return
-    end
-
-    settings.point = settings.point or {}
-    local pointX = tonumber(settings.point.x)
-    local pointY = tonumber(settings.point.y)
-
-    -- Do not overwrite valid point coordinates with backup values.
-    -- Backup restore is only for recovering missing/invalid point data.
-    if pointX ~= nil and pointY ~= nil then
-        return
-    end
-
-    local x = tonumber(settings.barPointX)
-    local y = tonumber(settings.barPointY)
-    if x == nil or y == nil then
-        return
-    end
-
-    settings.point.anchor = "CENTER"
-    settings.point.relativePoint = "CENTER"
-    settings.point.x = Round(x)
-    settings.point.y = Round(y)
+    return nil
 end
 
 local function NormalizeLabelSettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeLabelSettings) == "function" then
+        runtime:NormalizeLabelSettings(settings, {
+            maxStage = MAX_STAGE,
+            defaultStageLabels = DEFAULT_STAGE_LABELS,
+            defaultOutOfZoneLabel = DEFAULT_OUT_OF_ZONE_LABEL,
+            defaultAmbushLabel = DEFAULT_AMBUSH_LABEL,
+        })
+        return
+    end
+
     if type(settings.stageLabels) ~= "table" then
         settings.stageLabels = {}
     end
@@ -736,12 +718,29 @@ local function NormalizeLabelSettings()
         settings.ambushPrefix = ""
     end
 
+    if type(settings.bloodyCommandPrefix) ~= "string" then
+        settings.bloodyCommandPrefix = ""
+    end
+
+    if type(settings.bloodyCommandSuffix) ~= "string" then
+        settings.bloodyCommandSuffix = ""
+    end
+
     if type(settings.ambushCustomText) ~= "string" then
         settings.ambushCustomText = ""
     end
 end
 
 local function NormalizeColorSettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeColorSettings) == "function" then
+        runtime:NormalizeColorSettings(settings, {
+            defaults = DEFAULTS,
+            clamp = Clamp,
+        })
+        return
+    end
+
     local function normalizeColor(source, fallback)
         local color = type(source) == "table" and source or {}
         local r = Clamp(tonumber(color[1] or color.r) or fallback[1], 0, 1)
@@ -764,6 +763,17 @@ local function NormalizeColorSettings()
 end
 
 local function NormalizeDisplaySettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeDisplaySettings) == "function" then
+        runtime:NormalizeDisplaySettings(settings, {
+            constants = Preydator.Constants,
+            defaults = DEFAULTS,
+            maxStage = MAX_STAGE,
+            clamp = Clamp,
+        })
+        return
+    end
+
     settings.showTicks = settings.showTicks ~= false
     settings.showSparkLine = settings.showSparkLine == true
     settings.showInEditMode = settings.showInEditMode ~= false
@@ -949,75 +959,6 @@ local function NormalizeDisplaySettings()
     end
 end
 
-local function IsEditModePreviewActive()
-    local editModeFrame = _G.EditModeManagerFrame
-    return editModeFrame and editModeFrame.IsShown and editModeFrame:IsShown()
-end
-
-local function GetTickLayerSettings()
-    return "OVERLAY", 4
-end
-
-local function GetPercentTextLayerSettings()
-    local mode = settings and settings.percentDisplay or PERCENT_DISPLAY_INSIDE
-    if settings and settings.orientation == ORIENTATION_VERTICAL and type(settings.verticalPercentDisplay) == "string" then
-        mode = settings.verticalPercentDisplay
-    end
-
-    if mode == PERCENT_DISPLAY_INSIDE_BELOW then
-        mode = PERCENT_DISPLAY_INSIDE
-    end
-
-    if mode == PERCENT_DISPLAY_ABOVE_TICKS then
-        return "OVERLAY", 10
-    end
-
-    return "OVERLAY", 7
-end
-
-local function ApplyVerticalLabelRotation(fontString, enabled, side)
-    if not fontString or not fontString.SetRotation then
-        return
-    end
-
-    if enabled then
-        if side == "left" then
-            fontString:SetRotation(math.pi / 2)
-        else
-            fontString:SetRotation(-math.pi / 2)
-        end
-    else
-        fontString:SetRotation(0)
-    end
-end
-
-local function ResolveVerticalLabelJustifyH(side, anchorPoint)
-    if anchorPoint == "CENTER" then
-        return "CENTER"
-    end
-
-    local isTop = type(anchorPoint) == "string" and string.sub(anchorPoint, 1, 3) == "TOP"
-    local isBottom = type(anchorPoint) == "string" and string.sub(anchorPoint, 1, 6) == "BOTTOM"
-
-    if side == "left" then
-        if isTop then
-            return "RIGHT"
-        end
-        if isBottom then
-            return "LEFT"
-        end
-        return "LEFT"
-    end
-
-    if isTop then
-        return "LEFT"
-    end
-    if isBottom then
-        return "RIGHT"
-    end
-    return "RIGHT"
-end
-
 Preydator.GetRenderedVerticalPercent = function(rawPct, fillDirection)
     if fillDirection == FILL_DIRECTION_DOWN then
         return 100 - rawPct
@@ -1140,20 +1081,15 @@ Preydator.ResolveVerticalTextAnchor = function(side, align, offset, isSuffix)
     return "TOPLEFT", topRelative, xOffset, -2
 end
 
-local function ToVerticalText(text)
-    if type(text) ~= "string" or text == "" then
-        return ""
-    end
-
-    local chars = {}
-    for ch in text:gmatch(".") do
-        chars[#chars + 1] = ch
-    end
-
-    return table.concat(chars, "\n")
-end
-
 local function NormalizeProgressSettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeProgressSettings) == "function" then
+        runtime:NormalizeProgressSettings(settings, {
+            constants = Preydator.Constants,
+        })
+        return
+    end
+
     local mode = settings.progressSegments
     if mode ~= PROGRESS_SEGMENTS_QUARTERS and mode ~= PROGRESS_SEGMENTS_THIRDS then
         settings.progressSegments = PROGRESS_SEGMENTS_QUARTERS
@@ -1163,105 +1099,54 @@ local function NormalizeProgressSettings()
     settings.progressSegments = mode
 end
 
+local function NormalizeTransientSettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeTransientSettings) == "function" then
+        runtime:NormalizeTransientSettings(settings)
+        return
+    end
+
+    -- Legacy migration: older builds persisted this debug/session flag in SavedVariables.
+    -- Keep an explicit false value so stale true values are always corrected on next save.
+    settings.forceShowBar = false
+end
+
 local function NormalizeAmbushSettings()
+    local runtime = GetRuntimeModule("SettingsRuntime")
+    if runtime and type(runtime.NormalizeAmbushSettings) == "function" then
+        runtime:NormalizeAmbushSettings(settings, {
+            killSoundPath = KILL_SOUND_PATH,
+            getSoundPathForKey = GetSoundPathForKey,
+        })
+        return
+    end
+
     settings.ambushSoundEnabled = settings.ambushSoundEnabled ~= false
     settings.ambushVisualEnabled = settings.ambushVisualEnabled ~= false
+    settings.bloodyCommandSoundEnabled = settings.bloodyCommandSoundEnabled ~= false
+    settings.bloodyCommandVisualEnabled = settings.bloodyCommandVisualEnabled ~= false
 
     if type(settings.ambushSoundPath) ~= "string" or settings.ambushSoundPath == "" then
         local legacySoundKey = settings.ambushSoundKey
         settings.ambushSoundPath = GetSoundPathForKey(legacySoundKey, KILL_SOUND_PATH)
     end
 
+    if type(settings.bloodyCommandSoundPath) ~= "string" or settings.bloodyCommandSoundPath == "" then
+        settings.bloodyCommandSoundPath = KILL_SOUND_PATH
+    end
+
     settings.ambushSoundKey = nil
     settings.ambushCustomSoundPath = nil
 end
 
-local function GetProgressTickPercents()
-    local mode = (settings and settings.progressSegments) or PROGRESS_SEGMENTS_QUARTERS
-    local tickPercents = BAR_TICK_PCTS_BY_SEGMENT[mode]
-    if type(tickPercents) ~= "table" then
-        return BAR_TICK_PCTS_BY_SEGMENT[PROGRESS_SEGMENTS_QUARTERS]
-    end
-
-    return tickPercents
-end
-
-local function GetStageFallbackPercent(stage)
-    local mode = (settings and settings.progressSegments) or PROGRESS_SEGMENTS_QUARTERS
-    local stagePercents = STAGE_PCT_BY_SEGMENT[mode] or STAGE_PCT_BY_SEGMENT[PROGRESS_SEGMENTS_QUARTERS]
-    return stagePercents[stage] or 0
-end
-
-local function GetPreyZoneInfo(questID)
-    if not questID then
-        return nil, nil
-    end
-
-    if not (C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_Map and C_Map.GetMapInfo) then
-        return nil, nil
-    end
-
-    local okMapID, rawMapID = pcall(C_TaskQuest.GetQuestZoneID, questID)
-    local okNumericMapID, mapID = pcall(function()
-        return tonumber(rawMapID)
-    end)
-    mapID = (okMapID and okNumericMapID and mapID and mapID > 0) and mapID or nil
-    if not mapID then
-        return nil, nil
-    end
-
-    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, mapID)
-    mapInfo = okMapInfo and mapInfo or nil
-    return (mapInfo and mapInfo.name or nil), mapID
-end
-
-local function IsPlayerInPreyZone(preyMapID)
-    if not preyMapID then
-        return nil
-    end
-
-    if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo) then
-        return nil
-    end
-
-    if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
-        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
-        local okNumericMapID, playerMapID = pcall(function()
-            return tonumber(rawPlayerMapID)
-        end)
-        playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
-        state.playerMapID = playerMapID
-        state.playerMapHierarchy = {}
-        state.zoneCacheDirty = false
-
-        local guard = 0
-        local currentMapID = playerMapID
-        while currentMapID and guard < 20 do
-            state.playerMapHierarchy[currentMapID] = true
-
-            local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, currentMapID)
-            mapInfo = okMapInfo and mapInfo or nil
-            local okParentMapID, parentMapID = pcall(function()
-                return tonumber(mapInfo and mapInfo.parentMapID)
-            end)
-            parentMapID = (okParentMapID and parentMapID and parentMapID > 0) and parentMapID or nil
-            if not parentMapID then
-                break
-            end
-
-            currentMapID = parentMapID
-            guard = guard + 1
-        end
-    end
-
-    if not state.playerMapID then
-        return nil
-    end
-
-    return state.playerMapHierarchy[preyMapID] == true
-end
-
 local function IsPreyQuestOnCurrentMap(questID)
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.IsPreyQuestOnCurrentMap) == "function" then
+        return runtime:IsPreyQuestOnCurrentMap(questID, {
+            questLog = C_QuestLog,
+        })
+    end
+
     if not (questID and C_QuestLog and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetInfo) then
         return nil
     end
@@ -1284,6 +1169,16 @@ local function IsPreyQuestOnCurrentMap(questID)
 end
 
 local function RefreshInPreyZoneStatus(questID, force)
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.RefreshInPreyZoneStatus) == "function" then
+        return runtime:RefreshInPreyZoneStatus(questID, force, state, {
+            isValidQuestID = IsValidQuestID,
+            getTime = GetTime,
+            mapApi = C_Map,
+            questLog = C_QuestLog,
+        })
+    end
+
     if not IsValidQuestID(questID) then
         state.inPreyZone = nil
         return nil
@@ -1306,7 +1201,41 @@ local function RefreshInPreyZoneStatus(questID, force)
 
     local inPreyZone = nil
     if state.preyZoneMapID then
-        inPreyZone = IsPlayerInPreyZone(state.preyZoneMapID)
+        if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
+            if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
+                local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
+                local okNumericMapID, playerMapID = pcall(function()
+                    return tonumber(rawPlayerMapID)
+                end)
+                playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
+                state.playerMapID = playerMapID
+                state.playerMapHierarchy = {}
+                state.zoneCacheDirty = false
+
+                local guard = 0
+                local currentMapID = playerMapID
+                while currentMapID and guard < 20 do
+                    state.playerMapHierarchy[currentMapID] = true
+
+                    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, currentMapID)
+                    mapInfo = okMapInfo and mapInfo or nil
+                    local okParentMapID, parentMapID = pcall(function()
+                        return tonumber(mapInfo and mapInfo.parentMapID)
+                    end)
+                    parentMapID = (okParentMapID and parentMapID and parentMapID > 0) and parentMapID or nil
+                    if not parentMapID then
+                        break
+                    end
+
+                    currentMapID = parentMapID
+                    guard = guard + 1
+                end
+            end
+
+            if state.playerMapID then
+                inPreyZone = state.playerMapHierarchy[state.preyZoneMapID] == true
+            end
+        end
     else
         inPreyZone = IsPreyQuestOnCurrentMap(questID)
         -- For quests with no task-quest map ID, treat this as our zone snapshot.
@@ -1323,242 +1252,36 @@ local function RefreshInPreyZoneStatus(questID, force)
     return inPreyZone
 end
 
-local function GetDefaultStageSoundPath(stage)
-    if stage == 1 then
-        return ALERT_SOUND_PATH
-    end
-    if stage == 2 then
-        return AMBUSH_SOUND_PATH
-    end
-    if stage == 3 then
-        return TORMENT_SOUND_PATH
-    end
-    if stage == 4 then
-        return KILL_SOUND_PATH
-    end
-
-    return nil
-end
-
-local function BuildAddonSoundPath(fileName)
-    if type(fileName) ~= "string" then
-        return nil
-    end
-
-    local trimmed = fileName:match("^%s*(.-)%s*$")
-    if trimmed == "" then
-        return nil
-    end
-
-    if string.find(trimmed, "\\", 1, true) then
-        return trimmed
-    end
-
-    return SOUND_FOLDER_PREFIX .. trimmed
-end
-
-local function ExtractAddonSoundFileName(path)
-    if type(path) ~= "string" or path == "" then
-        return nil
-    end
-
-    local lower = string.lower(path)
-    local prefixLower = string.lower(SOUND_FOLDER_PREFIX)
-    if string.sub(lower, 1, #prefixLower) ~= prefixLower then
-        return nil
-    end
-
-    local fileName = string.sub(path, #SOUND_FOLDER_PREFIX + 1)
-    if fileName == "" then
-        return nil
-    end
-
-    return fileName
-end
-
-local function NormalizeSoundFileName(fileName)
-    if type(fileName) ~= "string" then
-        return nil
-    end
-
-    local normalized = string.lower(fileName:match("^%s*(.-)%s*$") or "")
-    if normalized == "" then
-        return nil
-    end
-
-    local prefixLower = string.lower(SOUND_FOLDER_PREFIX)
-    if string.sub(normalized, 1, #prefixLower) == prefixLower then
-        normalized = string.sub(normalized, #prefixLower + 1)
-    end
-
-    if normalized == "" then
-        return nil
-    end
-
-    if normalized:find("[/\\]") then
-        return nil
-    end
-
-    if not normalized:match("%.ogg$") then
-        normalized = normalized .. ".ogg"
-    end
-
-    return normalized
-end
-
-local function AddSoundFileName(fileName)
-    local normalized = NormalizeSoundFileName(fileName)
-    if not normalized then
-        return false, "Use a valid sound filename (optionally with .ogg)"
-    end
-
-    settings.soundFileNames = settings.soundFileNames or {}
-    for _, existing in ipairs(settings.soundFileNames) do
-        if NormalizeSoundFileName(existing) == normalized then
-            return false, "File is already in the list"
-        end
-    end
-
-    table.insert(settings.soundFileNames, normalized)
-    NormalizeSoundSettings()
-    return true, normalized
-end
-
-local function RemoveSoundFileName(fileName)
-    local normalized = NormalizeSoundFileName(fileName)
-    if not normalized then
-        return false, "Use a valid sound filename (optionally with .ogg)"
-    end
-
-    if PROTECTED_SOUND_FILENAMES[normalized] then
-        return false, "Default sound files cannot be removed"
-    end
-
-    settings.soundFileNames = settings.soundFileNames or {}
-    local removed = false
-    for index = #settings.soundFileNames, 1, -1 do
-        local existing = NormalizeSoundFileName(settings.soundFileNames[index])
-        if existing == normalized then
-            table.remove(settings.soundFileNames, index)
-            removed = true
-            break
-        end
-    end
-
-    if not removed then
-        local rawInput = string.lower((tostring(fileName or ""):match("^%s*(.-)%s*$") or ""))
-        local candidates = {}
-
-        if rawInput ~= "" then
-            for index = #settings.soundFileNames, 1, -1 do
-                local existing = NormalizeSoundFileName(settings.soundFileNames[index])
-                if existing then
-                    local existingNoExt = existing:gsub("%.ogg$", "")
-                    if rawInput == existing
-                        or rawInput == existingNoExt
-                        or string.sub(existingNoExt, -#rawInput) == rawInput
-                    then
-                        table.insert(candidates, { index = index, name = existing })
-                    end
-                end
-            end
-        end
-
-        if #candidates == 1 then
-            table.remove(settings.soundFileNames, candidates[1].index)
-            removed = true
-            normalized = candidates[1].name
-        elseif #candidates > 1 then
-            return false, "Multiple matches found. Type more of the file name."
-        end
-    end
-
-    if not removed then
-        return false, "File is not in the custom list"
-    end
-
-    NormalizeSoundSettings()
-    return true, normalized
-end
-
 GetSoundPathForKey = function(soundKey, fallbackPath)
-    if soundKey == AMBUSH_SOUND_ALERT then
-        return ALERT_SOUND_PATH
+    local runtime = GetRuntimeModule("SoundsRuntime")
+    if runtime and type(runtime.GetSoundPathForKey) == "function" then
+        return runtime:GetSoundPathForKey(soundKey, fallbackPath, {
+            soundKeys = {
+                alert = AMBUSH_SOUND_ALERT,
+                ambush = AMBUSH_SOUND_AMBUSH,
+                torment = AMBUSH_SOUND_TORMENT,
+                kill = AMBUSH_SOUND_KILL,
+            },
+            soundPaths = {
+                alert = ALERT_SOUND_PATH,
+                ambush = AMBUSH_SOUND_PATH,
+                torment = TORMENT_SOUND_PATH,
+                kill = KILL_SOUND_PATH,
+            },
+        })
     end
-    if soundKey == AMBUSH_SOUND_AMBUSH then
-        return AMBUSH_SOUND_PATH
-    end
-    if soundKey == AMBUSH_SOUND_TORMENT then
-        return TORMENT_SOUND_PATH
-    end
-    if soundKey == AMBUSH_SOUND_KILL then
-        return KILL_SOUND_PATH
-    end
+
     return fallbackPath
 end
 
-local function BuildSoundDisplayName(fileName)
-    local short = tostring(fileName or "")
-    short = short:gsub("%.ogg$", "")
-    short = short:gsub("[_%-]+", " ")
-    short = short:gsub("%s+", " ")
-    short = short:gsub("^%l", string.upper)
-    short = short:gsub("%s%l", function(s)
-        return string.upper(s)
-    end)
-    return short
-end
-
-local function BuildSoundDropdownOptions()
-    local options = {}
-    local files = (settings and settings.soundFileNames) or DEFAULT_SOUND_FILENAMES
-
-    options["__NONE__"] = {
-        text = _G.PreydatorL["None"],
-    }
-
-    for _, fileName in ipairs(files) do
-        local normalized = NormalizeSoundFileName(fileName)
-        if normalized then
-            local path = BuildAddonSoundPath(normalized)
-            options[path] = {
-                text = BuildSoundDisplayName(normalized),
-            }
-        end
-    end
-
-    return options
-end
-
-local function ResolveAmbushAlertSoundPath()
-    local path = settings and settings.ambushSoundPath
-    if path == "__NONE__" then
-        return nil
-    end
-    if type(path) == "string" and path ~= "" then
-        return path
-    end
-
-    return KILL_SOUND_PATH
-end
-
-local function GetWidgetTypePreyHuntProgress()
-    if Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress then
-        return Enum.UIWidgetVisualizationType.PreyHuntProgress
-    end
-
-    return PREY_WIDGET_TYPE
-end
-
-local function GetShownStateShown()
-    if Enum and Enum.WidgetShownState and Enum.WidgetShownState.Shown then
-        return Enum.WidgetShownState.Shown
-    end
-
-    return WIDGET_SHOWN
-end
-
 local function GetCurrentActivePreyQuest()
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.GetCurrentActivePreyQuest) == "function" then
+        return runtime:GetCurrentActivePreyQuest({
+            questLog = C_QuestLog,
+        })
+    end
+
     if C_QuestLog and C_QuestLog.GetActivePreyQuest then
         return C_QuestLog.GetActivePreyQuest()
     end
@@ -1567,6 +1290,14 @@ local function GetCurrentActivePreyQuest()
 end
 
 local function RefreshCurrentActivePreyQuestCache()
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.RefreshCurrentActivePreyQuestCache) == "function" then
+        return runtime:RefreshCurrentActivePreyQuestCache(state, {
+            getTime = GetTime,
+            getCurrentActivePreyQuest = GetCurrentActivePreyQuest,
+        })
+    end
+
     local now = GetTime and GetTime() or 0
     state.cachedActivePreyQuestID = GetCurrentActivePreyQuest()
     state.cachedActivePreyQuestAt = now
@@ -1574,6 +1305,15 @@ local function RefreshCurrentActivePreyQuestCache()
 end
 
 local function GetCurrentActivePreyQuestCached(maxAgeSeconds)
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.GetCurrentActivePreyQuestCached) == "function" then
+        return runtime:GetCurrentActivePreyQuestCached(maxAgeSeconds, state, {
+            getTime = GetTime,
+            defaultMaxAgeSeconds = ACTIVE_PREY_QUEST_CACHE_SECONDS,
+            getCurrentActivePreyQuest = GetCurrentActivePreyQuest,
+        })
+    end
+
     local now = GetTime and GetTime() or 0
     local maxAge = tonumber(maxAgeSeconds)
     if not maxAge or maxAge < 0 then
@@ -1588,6 +1328,16 @@ local function GetCurrentActivePreyQuestCached(maxAgeSeconds)
 end
 
 local function ArmQuestListenBurst(durationSeconds)
+    local runtime = GetRuntimeModule("PreyContextRuntime")
+    if runtime and type(runtime.ArmQuestListenBurst) == "function" then
+        runtime:ArmQuestListenBurst(durationSeconds, state, {
+            getTime = GetTime,
+            defaultBurstSeconds = QUEST_LISTEN_BURST_SECONDS,
+            getCurrentActivePreyQuest = GetCurrentActivePreyQuest,
+        })
+        return
+    end
+
     local now = GetTime and GetTime() or 0
     local duration = tonumber(durationSeconds)
     if not duration or duration <= 0 then
@@ -1637,38 +1387,6 @@ local function ExtractPreyTargetFromQuestTitle(questID)
     return nil, nil
 end
 
-local function StringContainsInsensitiveSafe(haystack, needle)
-    if type(haystack) ~= "string" or type(needle) ~= "string" or needle == "" then
-        return false
-    end
-
-    local ok, found = pcall(function()
-        local haystackLower = string.lower(haystack)
-        local needleLower = string.lower(needle)
-        return string.find(haystackLower, needleLower, 1, true) ~= nil
-    end)
-
-    return ok and found or false
-end
-
-local function IsAmbushSystemMessage(message, sender)
-    if type(message) ~= "string" then
-        return false
-    end
-
-    -- Detection relies solely on prey name match to avoid English-only string dependency
-    -- and to eliminate the double-trigger caused by both the "Ambushed!" system message
-    -- and CHAT_MSG_MONSTER_SAY firing for the same encounter.
-    local preyName = state and state.preyTargetName
-    if type(preyName) == "string" and preyName ~= "" then
-        if StringContainsInsensitiveSafe(message, preyName) or StringContainsInsensitiveSafe(sender, preyName) then
-            return true
-        end
-    end
-
-    return false
-end
-
 local function IsRestrictedInstanceForPreyBar()
     local inInstance = false
     local instanceType = nil
@@ -1712,37 +1430,6 @@ local function IsRestrictedInstanceForPreyBar()
     return false
 end
 
-local function ShouldScanAmbushChat()
-    if not state then
-        return false
-    end
-
-    local liveQuestID = GetCurrentActivePreyQuestCached(0)
-    if not IsValidQuestID(liveQuestID) then
-        return false
-    end
-
-    if state.activeQuestID ~= liveQuestID then
-        state.zoneCacheDirty = true
-        return false
-    end
-
-    -- Ambush detection is only relevant before final stage and while in prey zone.
-    if tonumber(state.stage) == MAX_STAGE then
-        return false
-    end
-
-    if state.zoneCacheDirty == true or state.inPreyZone == nil then
-        RefreshInPreyZoneStatus(liveQuestID, true)
-    end
-
-    if state.inPreyZone ~= true then
-        return false
-    end
-
-    return not IsRestrictedInstanceForPreyBar()
-end
-
 local function TriggerAmbushAlert(message, source)
     local now = GetTime and GetTime() or 0
     state.lastAmbushSystemMessage = message
@@ -1754,13 +1441,42 @@ local function TriggerAmbushAlert(message, source)
     if settings.ambushSoundEnabled ~= false then
         local nextSoundAt = (state.lastAmbushSoundAt or 0) + AMBUSH_SOUND_COOLDOWN_SECONDS
         if now >= nextSoundAt then
-            local ambushPath = ResolveAmbushAlertSoundPath()
+            local ambushPath = Preydator.API.ResolveAmbushSoundPath()
             TryPlaySound(ambushPath)
             state.lastAmbushSoundAt = now
         end
     end
 
     AddDebugLog("Ambush", "Detected from " .. tostring(source) .. ": " .. tostring(message), true)
+    UpdateBarDisplay()
+end
+
+local function ClearBloodyCommandAlert()
+    state.bloodyCommandAlertUntil = 0
+    state.bloodyCommandSourceName = nil
+    state.lastBloodyCommandSpellID = nil
+end
+
+local function TriggerBloodyCommandAlert(spellID, sourceName, source)
+    local now = GetTime and GetTime() or 0
+
+    state.lastBloodyCommandSpellID = tonumber(spellID)
+    state.bloodyCommandSourceName = sourceName
+
+    if settings.bloodyCommandVisualEnabled ~= false then
+        state.bloodyCommandAlertUntil = now + 20
+    else
+        state.bloodyCommandAlertUntil = 0
+    end
+
+    if settings.bloodyCommandSoundEnabled ~= false then
+        local path = Preydator.API.ResolveBloodyCommandSoundPath()
+        if path then
+            TryPlaySound(path)
+        end
+    end
+
+    AddDebugLog("BloodyCommand", "Detected from " .. tostring(source) .. " | spellID=" .. tostring(spellID) .. " | sourceName=" .. tostring(sourceName), true)
     UpdateBarDisplay()
 end
 
@@ -1814,6 +1530,24 @@ AddDebugLog = function(kind, message, forcePrint)
 end
 
 TryPlaySound = function(path, ignoreSoundToggle)
+    local runtime = GetRuntimeModule("SoundsRuntime")
+    if runtime and type(runtime.TryPlaySound) == "function" then
+        return runtime:TryPlaySound(path, ignoreSoundToggle, settings, {
+            isSoundsModuleEnabled = function()
+                local customization = Preydator and Preydator.GetModule and Preydator:GetModule("CustomizationStateV2")
+                if customization and type(customization.IsModuleEnabled) == "function" then
+                    return customization:IsModuleEnabled("sounds") == true
+                end
+                return true
+            end,
+            addDebugLog = AddDebugLog,
+            playSoundFile = PlaySoundFile,
+            timerAfter = C_Timer and C_Timer.After or nil,
+            warnedMissingSoundPaths = warnedMissingSoundPaths,
+            printFn = print,
+        })
+    end
+
     local customization = Preydator and Preydator.GetModule and Preydator:GetModule("CustomizationStateV2")
     if customization and type(customization.IsModuleEnabled) == "function" and customization:IsModuleEnabled("sounds") ~= true then
         AddDebugLog("TryPlaySound", "blocked by sounds module disabled | path=" .. tostring(path), false)
@@ -1854,45 +1588,8 @@ TryPlaySound = function(path, ignoreSoundToggle)
     return false
 end
 
-local function ResolveStageSoundPath(stage)
-    stage = tonumber(stage)
-    if not stage then
-        AddDebugLog("ResolveStageSoundPath", "invalid stage", false)
-        return nil
-    end
-
-    local defaultPath = GetDefaultStageSoundPath(stage)
-
-    if not settings then
-        return defaultPath
-    end
-
-    settings.stageSounds = settings.stageSounds or {}
-    local sounds = settings.stageSounds
-
-    local savedPath = sounds[stage]
-    if savedPath == "__NONE__" then
-        AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=none", false)
-        return nil
-    end
-    if type(savedPath) == "string" and savedPath ~= "" then
-        AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=" .. savedPath, false)
-        return savedPath
-    end
-
-    if defaultPath and defaultPath ~= "" then
-        sounds[stage] = defaultPath
-        AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=default | path=" .. defaultPath, false)
-        return defaultPath
-    end
-
-    AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=none | default=nil", true)
-
-    return nil
-end
-
 TryPlayStageSound = function(stage, ignoreSoundToggle)
-    local path = ResolveStageSoundPath(stage)
+    local path = Preydator.API.ResolveStageSoundPath(stage)
     if not path then
         AddDebugLog("TryPlayStageSound", "stage=" .. tostring(stage) .. " | no resolved path", true)
         return false
@@ -1916,7 +1613,7 @@ TryPlayStageSound = function(stage, ignoreSoundToggle)
     end
 
     if stage == MAX_STAGE then
-        local fallbackPath = ResolveStageSoundPath(MAX_STAGE - 1)
+        local fallbackPath = Preydator.API.ResolveStageSoundPath(MAX_STAGE - 1)
         if fallbackPath then
             AddDebugLog("TryPlayStageSound", "stage=" .. tostring(MAX_STAGE) .. " | primary failed, trying fallback stage=" .. tostring(MAX_STAGE - 1) .. " | path=" .. tostring(fallbackPath), true)
             if TryPlaySound(fallbackPath, ignoreSoundToggle) then
@@ -1989,422 +1686,25 @@ function barPositionUtil.Reset()
 
     local width, height = barPositionUtil.GetCurrentDimensions()
     settings.point.x, settings.point.y = barPositionUtil.GetDefaultPoint(width, height)
-    SyncBarPointToBackup()
+    do
+        local runtime = GetRuntimeModule("SettingsRuntime")
+        if runtime and type(runtime.SyncBarPointToBackup) == "function" then
+            runtime:SyncBarPointToBackup(settings)
+        end
+    end
 
     ApplyBarSettings()
     UpdateBarDisplay()
 end
 
 ApplyBarSettings = function()
-    if not UI.barFrame then
-        return
+    if type(BarRuntimeApplyHandler) == "function" then
+        return BarRuntimeApplyHandler()
     end
 
-    settings.point = settings.point or {}
-    local point = settings.point
-    local anchor = string.upper(tostring(point.anchor or DEFAULTS.point.anchor))
-    local relativePoint = string.upper(tostring(point.relativePoint or DEFAULTS.point.relativePoint))
-    local orientation = settings.orientation or ORIENTATION_HORIZONTAL
-    local frameScale
-    if orientation == ORIENTATION_VERTICAL then
-        frameScale = Clamp(tonumber(settings.verticalScale) or DEFAULTS.verticalScale, 0.5, 2)
-    else
-        frameScale = Clamp(tonumber(settings.scale) or DEFAULTS.scale, 0.5, 2)
+    if Preydator and type(Preydator.PrintDebug) == "function" then
+        Preydator:PrintDebug("Bar runtime handler missing; skipping ApplyBarSettings delegate.")
     end
-    local baseWidth
-    local baseHeight
-    if orientation == ORIENTATION_VERTICAL then
-        baseWidth = Clamp(math.floor((tonumber(settings.verticalWidth) or DEFAULTS.verticalWidth) + 0.5), 10, 60)
-        baseHeight = Clamp(math.floor((tonumber(settings.verticalHeight) or DEFAULTS.verticalHeight) + 0.5), 100, 350)
-        settings.verticalWidth = baseWidth
-        settings.verticalHeight = baseHeight
-    else
-        baseWidth = Clamp(math.floor((tonumber(settings.horizontalWidth) or DEFAULTS.horizontalWidth) + 0.5), 100, 350)
-        baseHeight = Clamp(math.floor((tonumber(settings.horizontalHeight) or DEFAULTS.horizontalHeight) + 0.5), 10, 60)
-        settings.horizontalWidth = baseWidth
-        settings.horizontalHeight = baseHeight
-    end
-
-    settings.width = baseWidth
-    settings.height = baseHeight
-
-    local scaledWidth = math.max(1, Round(baseWidth * frameScale))
-    local scaledHeight = math.max(1, Round(baseHeight * frameScale))
-    if anchor ~= "CENTER" then
-        anchor = "CENTER"
-    end
-
-    if relativePoint ~= "CENTER" then
-        relativePoint = "CENTER"
-    end
-
-    if point.x == nil or point.y == nil then
-        point.x, point.y = barPositionUtil.GetDefaultPoint(scaledWidth, scaledHeight)
-    end
-
-    local clampedX, clampedY = barPositionUtil.ClampToScreen(point.x, point.y, scaledWidth, scaledHeight)
-    point.anchor = anchor
-    point.relativePoint = relativePoint
-
-    if orientation == ORIENTATION_VERTICAL then
-        settings.verticalScale = frameScale
-    else
-        settings.scale = frameScale
-    end
-
-    UI.barFrame:SetSize(scaledWidth, scaledHeight)
-    UI.barFrame:SetScale(1)
-    UI.barFrame:SetFrameStrata("MEDIUM")
-    UI.barFrame:SetFrameLevel(5)
-    UI.barFrame:ClearAllPoints()
-    UI.barFrame:SetPoint("CENTER", UIParent, "CENTER", clampedX, clampedY)
-
-    if UI.barFill then
-        local fill = settings.fillColor
-        UI.barFill:ClearAllPoints()
-        UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-        UI.barFill:SetSize(0, math.max(1, scaledHeight - 2 * FILL_INSET))
-        UI.barFill:SetTexture(TEXTURE_PRESETS[settings.textureKey] or TEXTURE_PRESETS.default)
-        UI.barFill:SetVertexColor(fill[1], fill[2], fill[3], fill[4])
-        UI.barFill:SetDrawLayer("ARTWORK", 0)
-
-        if UI.barBorder and UI.barBorder.SetBackdropBorderColor then
-            if settings.borderColorLinked == false and settings.borderColor then
-                local bc = settings.borderColor
-                UI.barBorder:SetBackdropBorderColor(bc[1], bc[2], bc[3], bc[4] or 0.85)
-            else
-                UI.barBorder:SetBackdropBorderColor(fill[1], fill[2], fill[3], math.max(0.65, fill[4] or 0.85))
-            end
-        end
-    end
-
-    if UI.barSpark then
-        local spark = settings.sparkColor or DEFAULTS.sparkColor
-        UI.barSpark:SetColorTexture(spark[1], spark[2], spark[3], spark[4] or 0.9)
-        if orientation == ORIENTATION_VERTICAL then
-            UI.barSpark:SetSize(math.max(1, scaledWidth - 2 * FILL_INSET), 2)
-        else
-            UI.barSpark:SetSize(2, math.max(1, scaledHeight - 2 * FILL_INSET))
-        end
-        UI.barSpark:SetDrawLayer("OVERLAY", 3)
-        if not settings.showSparkLine then
-            UI.barSpark:Hide()
-        end
-    end
-
-    if UI.barFrame.BackgroundTexture then
-        local bg = settings.bgColor
-        UI.barFrame.BackgroundTexture:ClearAllPoints()
-        UI.barFrame.BackgroundTexture:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-        UI.barFrame.BackgroundTexture:SetPoint("TOPRIGHT", UI.barFrame, "TOPRIGHT", -FILL_INSET, -FILL_INSET)
-        UI.barFrame.BackgroundTexture:SetColorTexture(bg[1], bg[2], bg[3], bg[4])
-    end
-
-    local labelRow = settings.labelRowPosition or LABEL_ROW_ABOVE
-    local verticalTextSide = settings.verticalTextSide or "right"
-    local verticalPercentSide = settings.verticalPercentSide or "center"
-    local percentDisplayMode = settings.percentDisplay or PERCENT_DISPLAY_INSIDE
-    if orientation == ORIENTATION_VERTICAL then
-        percentDisplayMode = settings.verticalPercentDisplay or settings.percentDisplay or PERCENT_DISPLAY_INSIDE
-    end
-    local verticalTextOffset = Clamp(math.floor((tonumber(settings.verticalTextOffset) or 10) + 0.5), 2, 60)
-    local verticalPercentOffset = Clamp(math.floor((tonumber(settings.verticalPercentOffset) or 10) + 0.5), 2, 60)
-    local verticalTextAlign = settings.verticalTextAlign or "separate"
-
-    if UI.stageText then
-        local _, _, flags = UI.stageText:GetFont()
-        local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
-        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
-            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
-        then
-            titleFont = _G.STANDARD_TEXT_FONT
-        end
-        UI.stageText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
-        local titleColor = settings.titleColor or DEFAULTS.titleColor
-        UI.stageText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
-
-        local lm = settings.stageLabelMode or LABEL_MODE_CENTER
-        UI.stageText:ClearAllPoints()
-        if orientation == ORIENTATION_VERTICAL then
-            local anchorPoint, relativeAnchor, xOffset, yOffset
-            if verticalTextAlign == "middle" then
-                anchorPoint = "CENTER"
-                relativeAnchor = (verticalTextSide == "left") and "LEFT" or "RIGHT"
-                xOffset = (verticalTextSide == "left") and -(verticalTextOffset + FILL_INSET) or (verticalTextOffset + FILL_INSET)
-                yOffset = -6
-            elseif verticalTextAlign == "top" then
-                local useSuffixBoundary = verticalTextSide == "left"
-                anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, useSuffixBoundary)
-            elseif verticalTextAlign == "bottom" then
-                local useSuffixBoundary = verticalTextSide == "right"
-                anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, useSuffixBoundary)
-            else
-                anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, false)
-            end
-            UI.stageText:SetPoint(anchorPoint, UI.barFrame, relativeAnchor, xOffset, yOffset)
-            UI.stageText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
-            UI.stageText:SetJustifyV("MIDDLE")
-            ApplyVerticalLabelRotation(UI.stageText, true, verticalTextSide)
-        elseif lm == LABEL_MODE_LEFT or lm == LABEL_MODE_LEFT_COMBINED or lm == LABEL_MODE_LEFT_SUFFIX or lm == LABEL_MODE_SEPARATE then
-            if labelRow == LABEL_ROW_BELOW then
-                UI.stageText:SetPoint("TOPLEFT", UI.barFrame, "BOTTOMLEFT", 2, -4)
-            else
-                UI.stageText:SetPoint("BOTTOMLEFT", UI.barFrame, "TOPLEFT", 2, 4)
-            end
-            UI.stageText:SetJustifyH("LEFT")
-            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
-        elseif lm == LABEL_MODE_NONE then
-            if labelRow == LABEL_ROW_BELOW then
-                UI.stageText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -4)
-            else
-                UI.stageText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
-            end
-            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
-        else
-            if labelRow == LABEL_ROW_BELOW then
-                UI.stageText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -4)
-            else
-                UI.stageText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
-            end
-            UI.stageText:SetJustifyH("CENTER")
-            ApplyVerticalLabelRotation(UI.stageText, false, verticalTextSide)
-        end
-    end
-
-    if UI.stageSuffixText then
-        local _, _, flags = UI.stageSuffixText:GetFont()
-        local titleFont = FONT_PRESETS[settings.titleFontKey] or FONT_PRESETS.frizqt
-        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
-            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
-        then
-            titleFont = _G.STANDARD_TEXT_FONT
-        end
-        UI.stageSuffixText:SetFont(titleFont, math.max(8, Round((tonumber(settings.fontSize) or DEFAULTS.fontSize) * frameScale)), flags)
-        local titleColor = settings.titleColor or DEFAULTS.titleColor
-        UI.stageSuffixText:SetTextColor(titleColor[1], titleColor[2], titleColor[3], titleColor[4] or 1)
-        UI.stageSuffixText:ClearAllPoints()
-        if orientation == ORIENTATION_VERTICAL then
-            local anchorPoint, relativeAnchor, xOffset, yOffset = Preydator.ResolveVerticalTextAnchor(verticalTextSide, verticalTextAlign, verticalTextOffset, true)
-            UI.stageSuffixText:SetPoint(anchorPoint, UI.barFrame, relativeAnchor, xOffset, yOffset)
-            UI.stageSuffixText:SetJustifyH(ResolveVerticalLabelJustifyH(verticalTextSide, anchorPoint))
-            UI.stageSuffixText:SetJustifyV("MIDDLE")
-            ApplyVerticalLabelRotation(UI.stageSuffixText, true, verticalTextSide)
-        else
-            if labelRow == LABEL_ROW_BELOW then
-                UI.stageSuffixText:SetPoint("TOPRIGHT", UI.barFrame, "BOTTOMRIGHT", -2, -4)
-            else
-                UI.stageSuffixText:SetPoint("BOTTOMRIGHT", UI.barFrame, "TOPRIGHT", -2, 4)
-            end
-            UI.stageSuffixText:SetJustifyH("RIGHT")
-            ApplyVerticalLabelRotation(UI.stageSuffixText, false, verticalTextSide)
-        end
-    end
-
-    if UI.barText then
-        local _, _, flags = UI.barText:GetFont()
-        local percentFont = FONT_PRESETS[settings.percentFontKey] or FONT_PRESETS.frizqt
-        if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
-            and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
-        then
-            percentFont = _G.STANDARD_TEXT_FONT
-        end
-        UI.barText:SetFont(percentFont, math.max(8, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 1) * frameScale)), flags)
-        local percentColor = settings.percentColor or DEFAULTS.percentColor
-        UI.barText:SetTextColor(percentColor[1], percentColor[2], percentColor[3], percentColor[4] or 1)
-        local percentLayer, percentSubLevel = GetPercentTextLayerSettings()
-        UI.barText:SetDrawLayer(percentLayer, percentSubLevel)
-    end
-
-    local tickPercents = GetProgressTickPercents()
-    for index, tickLabel in ipairs(UI.barTickLabels) do
-        local hasTick = tickPercents[index] ~= nil
-        if tickLabel then
-            local _, _, flags = tickLabel:GetFont()
-            local percentFont = FONT_PRESETS[settings.percentFontKey] or FONT_PRESETS.frizqt
-            if _G.GetLocale and (_G.GetLocale() == "ruRU" or _G.GetLocale() == "koKR" or _G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW")
-                and type(_G.STANDARD_TEXT_FONT) == "string" and _G.STANDARD_TEXT_FONT ~= ""
-            then
-                percentFont = _G.STANDARD_TEXT_FONT
-            end
-            tickLabel:SetFont(percentFont, math.max(7, Round(((tonumber(settings.fontSize) or DEFAULTS.fontSize) - 4) * frameScale)), flags)
-            local percentColor = settings.percentColor or DEFAULTS.percentColor
-            tickLabel:SetTextColor(percentColor[1], percentColor[2], percentColor[3], 0.9)
-            if orientation ~= ORIENTATION_VERTICAL then
-                tickLabel:SetShown(hasTick and settings.showTicks and (
-                    percentDisplayMode == PERCENT_DISPLAY_UNDER_TICKS
-                    or percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS
-                ))
-            end
-        end
-
-        local tickMark = UI.barTickMarks[index]
-        if tickMark then
-            local tickColor = settings.tickColor or DEFAULTS.tickColor
-            tickMark:SetColorTexture(tickColor[1], tickColor[2], tickColor[3], tickColor[4] or 0.35)
-            local tickLayer, tickSubLevel = GetTickLayerSettings()
-            tickMark:SetDrawLayer(tickLayer, tickSubLevel)
-            tickMark:SetShown(hasTick and settings.showTicks)
-        end
-    end
-
-    local barWidth = scaledWidth
-    local barHeight = scaledHeight
-    if UI.barAlignmentDot then
-        UI.barAlignmentDot:ClearAllPoints()
-        UI.barAlignmentDot:SetPoint("CENTER", UI.barFrame, "CENTER", 0, 0)
-        UI.barAlignmentDot:Hide()
-    end
-
-    local innerTickWidth = math.max(0, barWidth - (2 * FILL_INSET))
-    local innerTickHeight = math.max(1, barHeight - (2 * FILL_INSET))
-    local tickWidth = 1
-    for index = 1, MAX_TICK_MARKS do
-        local pct = tickPercents[index]
-        local x = nil
-        local y = nil
-        if pct then
-            local renderPct = (orientation == ORIENTATION_VERTICAL) and Preydator.GetRenderedVerticalPercent(pct, settings.verticalFillDirection) or pct
-            if orientation == ORIENTATION_VERTICAL then
-                y = FILL_INSET + math.floor((innerTickHeight * (renderPct / 100)) + 0.5)
-                y = math.floor((y / tickWidth) + 0.5) * tickWidth
-            else
-                x = FILL_INSET + math.floor((innerTickWidth * (pct / 100)) + 0.5)
-                x = math.floor((x / tickWidth) + 0.5) * tickWidth
-            end
-        end
-        local tickMark = UI.barTickMarks[index]
-        if tickMark then
-            if pct then
-                tickMark:ClearAllPoints()
-                if orientation == ORIENTATION_VERTICAL then
-                    local renderPct = Preydator.GetRenderedVerticalPercent(pct, settings.verticalFillDirection)
-                    if renderPct == 100 then
-                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, barHeight - FILL_INSET - tickWidth)
-                    else
-                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, y)
-                    end
-                    tickMark:SetSize(innerTickWidth, tickWidth)
-                else
-                    if pct == 100 then
-                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", barWidth - FILL_INSET - tickWidth, FILL_INSET)
-                    else
-                        tickMark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", x, FILL_INSET)
-                    end
-                    tickMark:SetSize(tickWidth, innerTickHeight)
-                end
-            else
-                tickMark:Hide()
-            end
-        end
-
-        local tickLabel = UI.barTickLabels[index]
-        if tickLabel then
-            if pct then
-                tickLabel:ClearAllPoints()
-                if orientation == ORIENTATION_VERTICAL then
-                    local renderPct = Preydator.GetRenderedVerticalPercent(pct, settings.verticalFillDirection)
-                    local percentEdgeOffset = verticalPercentOffset + FILL_INSET
-                    local showTickPct = settings.showVerticalTickPercent == true
-                        and percentDisplayMode ~= PERCENT_DISPLAY_OFF
-                    if not showTickPct then
-                        tickLabel:SetText("")
-                        tickLabel:Hide()
-                    elseif verticalPercentSide == "center" then
-                        -- inside: below tick when fill up, above tick when fill down
-                        if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                            tickLabel:SetPoint("BOTTOM", UI.barFrame, "BOTTOM", 0, y + 2)
-                        else
-                            tickLabel:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, y - 2)
-                        end
-                    elseif renderPct == 100 then
-                        if verticalPercentSide == "left" then
-                            tickLabel:SetPoint("RIGHT", UI.barFrame, "BOTTOMLEFT", -percentEdgeOffset, barHeight - FILL_INSET)
-                        else
-                            tickLabel:SetPoint("LEFT", UI.barFrame, "BOTTOMRIGHT", percentEdgeOffset, barHeight - FILL_INSET)
-                        end
-                    else
-                        if verticalPercentSide == "left" then
-                            tickLabel:SetPoint("RIGHT", UI.barFrame, "BOTTOMLEFT", -percentEdgeOffset, y)
-                        else
-                            tickLabel:SetPoint("LEFT", UI.barFrame, "BOTTOMRIGHT", percentEdgeOffset, y)
-                        end
-                    end
-                elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS then
-                    if pct == 0 then
-                        tickLabel:SetPoint("BOTTOMLEFT", UI.barFrame, "TOPLEFT", 0, 1)
-                    elseif pct == 100 then
-                        tickLabel:SetPoint("BOTTOMRIGHT", UI.barFrame, "TOPRIGHT", 0, 1)
-                    else
-                        tickLabel:SetPoint("BOTTOM", UI.barFrame, "BOTTOMLEFT", x, barHeight + 1)
-                    end
-                elseif pct == 0 then
-                    tickLabel:SetPoint("TOPLEFT", UI.barFrame, "BOTTOMLEFT", 0, -1)
-                elseif pct == 100 then
-                    tickLabel:SetPoint("TOPRIGHT", UI.barFrame, "BOTTOMRIGHT", 0, -1)
-                else
-                    tickLabel:SetPoint("TOP", UI.barFrame, "BOTTOMLEFT", x, -1)
-                end
-                tickLabel:SetText(tostring(pct))
-                tickLabel:SetDrawLayer("OVERLAY", 7)
-                if orientation == ORIENTATION_VERTICAL then
-                    local showTickPct = settings.showVerticalTickPercent == true
-                        and percentDisplayMode ~= PERCENT_DISPLAY_OFF
-                    tickLabel:SetShown(showTickPct)
-                else
-                    tickLabel:SetShown(settings.showTicks and (
-                        percentDisplayMode == PERCENT_DISPLAY_UNDER_TICKS
-                        or percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS
-                    ))
-                end
-            else
-                tickLabel:SetText("")
-                tickLabel:Hide()
-            end
-        end
-    end
-
-    local verticalTicksReplacePercent = orientation == ORIENTATION_VERTICAL
-        and settings.showVerticalTickPercent == true
-        and percentDisplayMode ~= PERCENT_DISPLAY_OFF
-
-    if UI.barText then
-        if verticalTicksReplacePercent then
-            UI.barText:Hide()
-        elseif percentDisplayMode == PERCENT_DISPLAY_OFF then
-            UI.barText:Hide()
-        elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_BAR then
-            UI.barText:Show()
-            UI.barText:ClearAllPoints()
-            if orientation == ORIENTATION_VERTICAL then
-                UI.barText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, math.max(2, verticalPercentOffset))
-            else
-                UI.barText:SetPoint("BOTTOM", UI.barFrame, "TOP", 0, 4)
-            end
-        elseif percentDisplayMode == PERCENT_DISPLAY_ABOVE_TICKS then
-            UI.barText:Hide()
-        elseif percentDisplayMode == PERCENT_DISPLAY_BELOW_BAR then
-            UI.barText:Show()
-            UI.barText:ClearAllPoints()
-            if orientation == ORIENTATION_VERTICAL then
-                UI.barText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -math.max(2, verticalPercentOffset))
-            else
-                UI.barText:SetPoint("TOP", UI.barFrame, "BOTTOM", 0, -14)
-            end
-        elseif percentDisplayMode == PERCENT_DISPLAY_UNDER_TICKS then
-            UI.barText:Hide()
-        else
-            UI.barText:Show()
-            UI.barText:ClearAllPoints()
-            if orientation == ORIENTATION_VERTICAL then
-                UI.barText:SetPoint("CENTER", UI.barFrame, "CENTER", 0, 0)
-                UI.barText:SetDrawLayer("OVERLAY", 7)
-            else
-                UI.barText:SetPoint("center", UI.barFrame, "center", 0, 0)
-            end
-        end
-    end
-
-    UI.barFrame:SetMovable(true)
 end
 
 local function EnsureBar()
@@ -2452,7 +1752,12 @@ local function EnsureBar()
         local parentCenterX, parentCenterY = UIParent:GetCenter()
         if frameCenterX and frameCenterY and parentCenterX and parentCenterY then
             settings.point.x, settings.point.y = barPositionUtil.ClampToScreen(frameCenterX - parentCenterX, frameCenterY - parentCenterY, frameWidth, frameHeight)
-            SyncBarPointToBackup()
+            do
+                local runtime = GetRuntimeModule("SettingsRuntime")
+                if runtime and type(runtime.SyncBarPointToBackup) == "function" then
+                    runtime:SyncBarPointToBackup(settings)
+                end
+            end
             self:ClearAllPoints()
             self:SetPoint("CENTER", UIParent, "CENTER", settings.point.x, settings.point.y)
             return
@@ -2460,7 +1765,12 @@ local function EnsureBar()
 
         local _, _, _, x, y = self:GetPoint(1)
         settings.point.x, settings.point.y = barPositionUtil.ClampToScreen(x, y, frameWidth, frameHeight)
-        SyncBarPointToBackup()
+        do
+            local runtime = GetRuntimeModule("SettingsRuntime")
+            if runtime and type(runtime.SyncBarPointToBackup) == "function" then
+                runtime:SyncBarPointToBackup(settings)
+            end
+        end
         self:ClearAllPoints()
         self:SetPoint("CENTER", UIParent, "CENTER", settings.point.x, settings.point.y)
     end
@@ -2476,7 +1786,8 @@ local function EnsureBar()
             return
         end
 
-        local isEditModePreview = IsEditModePreviewActive()
+        local editModeFrame = _G.EditModeManagerFrame
+        local isEditModePreview = editModeFrame and editModeFrame.IsShown and editModeFrame:IsShown()
         local allowStageFourMapClickFallback = settings
             and settings.disableDefaultPreyIcon == true
             and state
@@ -2489,7 +1800,7 @@ local function EnsureBar()
         end
 
         if isEditModePreview then
-            self.PreydatorClickStartX, self.PreydatorClickStartY = GetCursorPosition()
+            self.PreydatorClickStartX, self.PreydatorClickStartY = _G.GetCursorPosition()
             self.PreydatorClickStartTime = GetTime and GetTime() or 0
         end
     end)
@@ -2521,7 +1832,8 @@ local function EnsureBar()
             return
         end
 
-        if IsEditModePreviewActive() then
+        local editModeFrame = _G.EditModeManagerFrame
+        if editModeFrame and editModeFrame.IsShown and editModeFrame:IsShown() then
             local startX = self.PreydatorClickStartX
             local startY = self.PreydatorClickStartY
             local startTime = self.PreydatorClickStartTime or 0
@@ -2647,22 +1959,6 @@ local function GetStageFromState(progressState)
     return 1
 end
 
-local function ClampPercent(value)
-    return Clamp(value, 0, 100)
-end
-
-local function NormalizePercentCandidate(value)
-    if type(value) ~= "number" then
-        return nil
-    end
-
-    if value >= 0 and value <= 1 then
-        return ClampPercent(value * 100)
-    end
-
-    return ClampPercent(value)
-end
-
 local function ExtractProgressPercentFromInfoScan(info)
     if type(info) ~= "table" then
         return nil
@@ -2672,7 +1968,12 @@ local function ExtractProgressPercentFromInfoScan(info)
         if type(value) == "number" then
             local keyText = string.lower(tostring(key))
             if string.find(keyText, "percent", 1, true) then
-                local pct = NormalizePercentCandidate(value)
+                local pct = nil
+                if value >= 0 and value <= 1 then
+                    pct = Clamp(value * 100, 0, 100)
+                else
+                    pct = Clamp(value, 0, 100)
+                end
                 if pct ~= nil then
                     return pct
                 end
@@ -2706,7 +2007,7 @@ local function ExtractProgressPercentFromInfoScan(info)
     for _, current in ipairs(currentValues) do
         for _, maxValue in ipairs(maxValues) do
             if maxValue > 0 and current <= maxValue then
-                local pct = ClampPercent((current / maxValue) * 100)
+                local pct = Clamp((current / maxValue) * 100, 0, 100)
                 if pct >= 0 and pct <= 100 then
                     return pct
                 end
@@ -2715,27 +2016,6 @@ local function ExtractProgressPercentFromInfoScan(info)
     end
 
     return nil
-end
-
-local function SummarizeInfoFields(info)
-    if type(info) ~= "table" then
-        return ""
-    end
-
-    local parts = {}
-    local count = 0
-    for key, value in pairs(info) do
-        if key ~= "tooltip" and (type(value) == "number" or type(value) == "string" or type(value) == "boolean") then
-            count = count + 1
-            if count > 10 then
-                parts[#parts + 1] = "..."
-                break
-            end
-            parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
-        end
-    end
-
-    return table.concat(parts, ", ")
 end
 
 local function ExtractProgressPercent(info, tooltipText)
@@ -2751,7 +2031,15 @@ local function ExtractProgressPercent(info, tooltipText)
         }
 
         for _, fieldName in ipairs(directFields) do
-            local pct = NormalizePercentCandidate(info[fieldName])
+            local rawValue = info[fieldName]
+            local pct = nil
+            if type(rawValue) == "number" then
+                if rawValue >= 0 and rawValue <= 1 then
+                    pct = Clamp(rawValue * 100, 0, 100)
+                else
+                    pct = Clamp(rawValue, 0, 100)
+                end
+            end
             if pct ~= nil then
                 return pct
             end
@@ -2765,7 +2053,7 @@ local function ExtractProgressPercent(info, tooltipText)
                 for _, maxField in ipairs(maxFields) do
                     local maxValue = info[maxField]
                     if type(maxValue) == "number" and maxValue > 0 then
-                        return ClampPercent((current / maxValue) * 100)
+                        return Clamp((current / maxValue) * 100, 0, 100)
                     end
                 end
             end
@@ -2781,7 +2069,7 @@ local function ExtractProgressPercent(info, tooltipText)
         local pctText = tooltipText:match("(%d+)%s*%%")
         local pctValue = tonumber(pctText)
         if pctValue then
-            return ClampPercent(pctValue)
+            return Clamp(pctValue, 0, 100)
         end
     end
 
@@ -2802,7 +2090,7 @@ local function ExtractQuestObjectivePercent(questID)
             rawQuestBarPct = nil
         end
         if rawQuestBarPct ~= nil then
-            questBarPct = ClampPercent(rawQuestBarPct)
+            questBarPct = Clamp(rawQuestBarPct, 0, 100)
         end
     end
 
@@ -2875,7 +2163,7 @@ local function ExtractQuestObjectivePercent(questID)
                         local pctText = text:match("(%d+)%s*%%")
                         local pctValue = tonumber(pctText)
                         if pctValue then
-                            return ClampPercent(pctValue)
+                            return Clamp(pctValue, 0, 100)
                         end
                     end
                 end
@@ -2885,7 +2173,7 @@ local function ExtractQuestObjectivePercent(questID)
 
     local objectivePct = nil
     if anyNumericObjective and totalRequired > 0 then
-        objectivePct = ClampPercent((totalFulfilled / totalRequired) * 100)
+        objectivePct = Clamp((totalFulfilled / totalRequired) * 100, 0, 100)
     end
 
     if objectivePct ~= nil and questBarPct ~= nil then
@@ -2904,316 +2192,22 @@ local function ExtractQuestObjectivePercent(questID)
 end
 
 UpdateBarDisplay = function()
-    local customizationV2 = Preydator:GetModule("CustomizationStateV2")
-    local barEnabled = true
-    if customizationV2 and type(customizationV2.IsModuleEnabled) == "function" then
-        barEnabled = customizationV2:IsModuleEnabled("bar") == true
-    end
-    if not barEnabled then
-        if UI.barFrame then
-            UI.barFrame:Hide()
-        end
-        RunModuleHook("OnAfterUpdateBarDisplay", {
-            shouldShowBar = false,
-            forceAmbushAlert = false,
-            forceKillStage = false,
-            hasActiveQuest = false,
-            displayPercent = 0,
-            stage = state.stage,
-        })
-        return
+    if type(BarRuntimeUpdateHandler) == "function" then
+        return BarRuntimeUpdateHandler()
     end
 
-    EnsureBar()
-    ApplyDefaultPreyIconVisibility()
-
-    local now = GetTime and GetTime() or 0
-    local hasActiveQuest = state.activeQuestID ~= nil
-    local forceKillStage = now < (state.killStageUntil or 0)
-    local forceAmbushAlert = now < (state.ambushAlertUntil or 0)
-    local isOutOfPreyZone = hasActiveQuest and state.inPreyZone == false
-    local onlyShowInPreyZone = settings.onlyShowInPreyZone == true
-    local editModePreview = settings.showInEditMode == true and IsEditModePreviewActive()
-    local isRestrictedInstance = IsRestrictedInstanceForPreyBar()
-    local shouldShow = false
-
-    if isRestrictedInstance and not editModePreview then
-        shouldShow = false
-    elseif state.forceShowBar or forceKillStage or forceAmbushAlert or editModePreview then
-        shouldShow = true
-    elseif onlyShowInPreyZone then
-        shouldShow = hasActiveQuest and not isOutOfPreyZone
-    else
-        shouldShow = true
+    if Preydator and type(Preydator.PrintDebug) == "function" then
+        Preydator:PrintDebug("Bar runtime handler missing; skipping UpdateBarDisplay delegate.")
     end
-
-    if not shouldShow then
-        UI.barFrame:Hide()
-        RunModuleHook("OnAfterUpdateBarDisplay", {
-            shouldShowBar = false,
-            forceAmbushAlert = forceAmbushAlert,
-            forceKillStage = forceKillStage,
-            hasActiveQuest = hasActiveQuest,
-            displayPercent = 0,
-            stage = state.stage,
-        })
-        return
-    end
-
-    UI.barFrame:Show()
-
-    local stage = forceKillStage and MAX_STAGE or GetStageFromState(state.progressState)
-    local pct = 0
-    local displayReason = "default"
-    if forceKillStage then
-        pct = 100
-        displayReason = "killStage"
-    elseif editModePreview and not hasActiveQuest then
-        pct = 0
-        displayReason = "editModePreview"
-    elseif not hasActiveQuest then
-        pct = 0
-        displayReason = "noActiveQuest"
-    elseif isOutOfPreyZone then
-        pct = 0
-        displayReason = "outOfPreyZone"
-    else
-        if stage == MAX_STAGE then
-            pct = 100
-            if state.lastPercentSource == "none" then
-                state.lastPercentSource = "final"
-            end
-        else
-            pct = state.progressPercent
-            local shouldUseStageFallback = (pct == nil) or (stage >= 1 and pct <= 0)
-
-            if shouldUseStageFallback then
-                pct = GetStageFallbackPercent(stage)
-                if state.lastPercentSource == "none" then
-                    state.lastPercentSource = "stage"
-                end
-            end
-        end
-        displayReason = "activeQuest"
-    end
-    local label = GetStageLabel(stage)
-    local barWidth = (UI.barFrame and UI.barFrame.GetWidth and UI.barFrame:GetWidth()) or settings.width
-    local barHeight = (UI.barFrame and UI.barFrame.GetHeight and UI.barFrame:GetHeight()) or settings.height
-    local innerFillWidth = math.max(0, barWidth - 2 * FILL_INSET)
-    local innerFillHeight = math.max(0, barHeight - 2 * FILL_INSET)
-    local isVertical = settings.orientation == ORIENTATION_VERTICAL
-
-    if UI.barFill then
-        local width = innerFillWidth * (pct / 100)
-        local height = innerFillHeight * (pct / 100)
-        local shouldHideFill = (pct <= 0) or (not hasActiveQuest and not forceKillStage and not forceAmbushAlert)
-        if shouldHideFill then
-            UI.barFill:SetWidth(0)
-            UI.barFill:SetHeight(0)
-            UI.barFill:Hide()
-            if UI.barSpark then
-                UI.barSpark:Hide()
-            end
-        else
-            UI.barFill:ClearAllPoints()
-            if isVertical then
-                UI.barFill:SetWidth(innerFillWidth)
-                UI.barFill:SetHeight(math.max(1, height))
-                if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                    UI.barFill:SetPoint("TOPLEFT", UI.barFrame, "TOPLEFT", FILL_INSET, -FILL_INSET)
-                else
-                    UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-                end
-            else
-                UI.barFill:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, FILL_INSET)
-                UI.barFill:SetWidth(math.max(1, width))
-                UI.barFill:SetHeight(innerFillHeight)
-            end
-            UI.barFill:Show()
-            if UI.barSpark and settings.showSparkLine then
-                local sparkWidth = 2
-                UI.barSpark:ClearAllPoints()
-                if isVertical then
-                    local sparkY
-                    if settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                        sparkY = barHeight - FILL_INSET - math.max(1, height)
-                    else
-                        sparkY = FILL_INSET + math.max(0, height - sparkWidth)
-                    end
-                    if pct >= 100 and settings.verticalFillDirection == FILL_DIRECTION_DOWN then
-                        sparkY = FILL_INSET
-                    elseif pct >= 100 then
-                        sparkY = barHeight - FILL_INSET - sparkWidth
-                    end
-                    UI.barSpark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", FILL_INSET, sparkY)
-                else
-                    local sparkX = FILL_INSET + math.max(0, width - sparkWidth)
-                    if pct >= 100 then
-                        sparkX = barWidth - FILL_INSET - sparkWidth
-                    end
-                    UI.barSpark:SetPoint("BOTTOMLEFT", UI.barFrame, "BOTTOMLEFT", sparkX, FILL_INSET)
-                end
-                UI.barSpark:Show()
-            elseif UI.barSpark then
-                UI.barSpark:Hide()
-            end
-        end
-    end
-
-    state.lastDisplayPct = pct
-    state.lastDisplayReason = displayReason
-
-    state.stage = stage
-
-    local allowBarDrag = settings and not settings.locked
-    local allowEditModeClickOpen = IsEditModePreviewActive()
-    local allowStageFourMapClickFallback = settings
-        and settings.disableDefaultPreyIcon == true
-        and stage == MAX_STAGE
-    if UI.barFrame and UI.barFrame.EnableMouse then
-        UI.barFrame:EnableMouse((allowBarDrag and true or false) or (allowStageFourMapClickFallback and true or false) or (allowEditModeClickOpen and true or false))
-    end
-
-    local prefixText = ""
-    local suffixText = ""
-    if forceAmbushAlert then
-        prefixText = (settings and settings.ambushPrefix) or ""
-        local customAmbushText = settings and settings.ambushCustomText
-        if type(customAmbushText) == "string" and customAmbushText ~= "" then
-            suffixText = customAmbushText
-        else
-            local ambushSuffix = (settings and settings.ambushLabel) or DEFAULT_AMBUSH_LABEL
-            if type(state.preyTargetName) == "string" and state.preyTargetName ~= "" then
-                suffixText = ambushSuffix .. ": " .. state.preyTargetName
-            else
-                suffixText = ambushSuffix
-            end
-        end
-    elseif isOutOfPreyZone and not forceKillStage then
-        prefixText = (settings and settings.outOfZonePrefix) or ""
-        suffixText = settings.outOfZoneLabel or DEFAULT_OUT_OF_ZONE_LABEL
-    elseif editModePreview and not hasActiveQuest and not forceKillStage then
-        suffixText = "Preydator (Edit Mode Preview)"
-    elseif not hasActiveQuest and not forceKillStage then
-        local zoneName = GetZoneText and GetZoneText() or "Unknown Zone"
-        suffixText = zoneName
-    else
-        prefixText = (settings.stageSuffixLabels and settings.stageSuffixLabels[stage]) or ""
-        suffixText = label
-    end
-
-    local verticalAlignMode = nil
-    local verticalTextSide = settings.verticalTextSide or "right"
-    if isVertical then
-        verticalAlignMode = settings.verticalTextAlign or "separate"
-        if verticalAlignMode == "top_suffix_only" or verticalAlignMode == "bottom_suffix_only" then
-            prefixText = ""
-        elseif verticalAlignMode == "top_prefix_only" or verticalAlignMode == "bottom_prefix_only" then
-            suffixText = ""
-        end
-    end
-
-    local centeredText = suffixText
-    if prefixText ~= "" and suffixText ~= "" then
-        centeredText = prefixText .. " " .. suffixText
-    elseif prefixText ~= "" then
-        centeredText = prefixText
-    end
-
-    -- Apply label mode: stageLabels = Suffix (right), stageSuffixLabels = Prefix (left)
-    local lm = settings.stageLabelMode or LABEL_MODE_CENTER
-    if settings.orientation == ORIENTATION_VERTICAL then
-        lm = LABEL_MODE_SEPARATE
-    end
-    local function LabelOut(text)
-        if settings.orientation == ORIENTATION_VERTICAL and not (UI.stageText and UI.stageText.SetRotation) then
-            return ToVerticalText(text)
-        end
-        return text
-    end
-    if lm == LABEL_MODE_NONE then
-        UI.stageText:SetText("") UI.stageText:Hide()
-        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-    elseif lm == LABEL_MODE_SEPARATE then
-        local boundaryVerticalMode = isVertical
-            and (verticalTextSide == "left" or verticalTextSide == "right")
-            and (verticalAlignMode == "top" or verticalAlignMode == "middle" or verticalAlignMode == "bottom")
-        local boundaryVerticalText = nil
-        if boundaryVerticalMode then
-            if prefixText ~= "" and suffixText ~= "" then
-                boundaryVerticalText = centeredText
-            elseif prefixText ~= "" then
-                boundaryVerticalText = prefixText
-            elseif suffixText ~= "" then
-                boundaryVerticalText = suffixText
-            end
-        end
-
-        if boundaryVerticalMode then
-            if boundaryVerticalText ~= nil and boundaryVerticalText ~= "" then
-                UI.stageText:SetText(LabelOut(boundaryVerticalText))
-                UI.stageText:Show()
-            else
-                UI.stageText:SetText("")
-                UI.stageText:Hide()
-            end
-            if UI.stageSuffixText then
-                UI.stageSuffixText:SetText("")
-                UI.stageSuffixText:Hide()
-            end
-        else
-            if prefixText ~= "" then UI.stageText:SetText(LabelOut(prefixText)) UI.stageText:Show()
-            else UI.stageText:SetText("") UI.stageText:Hide() end
-            if UI.stageSuffixText then
-                if suffixText ~= "" then UI.stageSuffixText:SetText(LabelOut(suffixText)) UI.stageSuffixText:Show()
-                else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-            end
-        end
-    elseif lm == LABEL_MODE_LEFT then
-        if prefixText ~= "" then UI.stageText:SetText(LabelOut(prefixText)) UI.stageText:Show()
-        else UI.stageText:SetText("") UI.stageText:Hide() end
-        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-    elseif lm == LABEL_MODE_LEFT_COMBINED then
-        if centeredText ~= "" then UI.stageText:SetText(LabelOut(centeredText)) UI.stageText:Show()
-        else UI.stageText:SetText("") UI.stageText:Hide() end
-        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-    elseif lm == LABEL_MODE_LEFT_SUFFIX then
-        if suffixText ~= "" then UI.stageText:SetText(LabelOut(suffixText)) UI.stageText:Show()
-        else UI.stageText:SetText("") UI.stageText:Hide() end
-        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-    elseif lm == LABEL_MODE_RIGHT then
-        UI.stageText:SetText("") UI.stageText:Hide()
-        if UI.stageSuffixText then
-            if suffixText ~= "" then UI.stageSuffixText:SetText(LabelOut(suffixText)) UI.stageSuffixText:Show()
-            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-        end
-    elseif lm == LABEL_MODE_RIGHT_COMBINED then
-        UI.stageText:SetText("") UI.stageText:Hide()
-        if UI.stageSuffixText then
-            if centeredText ~= "" then UI.stageSuffixText:SetText(LabelOut(centeredText)) UI.stageSuffixText:Show()
-            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-        end
-    elseif lm == LABEL_MODE_RIGHT_PREFIX then
-        UI.stageText:SetText("") UI.stageText:Hide()
-        if UI.stageSuffixText then
-            if prefixText ~= "" then UI.stageSuffixText:SetText(LabelOut(prefixText)) UI.stageSuffixText:Show()
-            else UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-        end
-    else
-        if centeredText ~= "" then UI.stageText:SetText(LabelOut(centeredText)) UI.stageText:Show()
-        else UI.stageText:SetText("") UI.stageText:Hide() end
-        if UI.stageSuffixText then UI.stageSuffixText:SetText("") UI.stageSuffixText:Hide() end
-    end
-
-    UI.barText:SetText(string.format("%d%%", pct))
 
     RunModuleHook("OnAfterUpdateBarDisplay", {
-        shouldShowBar = true,
-        forceAmbushAlert = forceAmbushAlert,
-        forceKillStage = forceKillStage,
-        hasActiveQuest = hasActiveQuest,
-        displayPercent = pct,
-        stage = stage,
+        shouldShowBar = false,
+        forceAmbushAlert = false,
+        forceBloodyCommandAlert = false,
+        forceKillStage = false,
+        hasActiveQuest = false,
+        displayPercent = 0,
+        stage = state.stage,
     })
 end
 
@@ -3262,6 +2256,9 @@ local function ClearPreyStateAndDisplay()
     state.ambushAlertUntil = 0
     state.lastAmbushSoundAt = 0
     state.lastAmbushSystemMessage = nil
+    state.bloodyCommandAlertUntil = 0
+    state.bloodyCommandSourceName = nil
+    state.lastBloodyCommandSpellID = nil
 
     if UI.barFill then
         UI.barFill:SetWidth(0)
@@ -3497,24 +2494,24 @@ TryOpenPreyQuestOnMap = function()
         superTrackedQuest = ok == true
     end
 
-    if OpenQuestMap then
-        pcall(OpenQuestMap)
-    elseif ToggleWorldMap then
-        pcall(ToggleWorldMap)
+    if _G.OpenQuestMap then
+        pcall(_G.OpenQuestMap)
+    elseif _G.ToggleWorldMap then
+        pcall(_G.ToggleWorldMap)
     elseif _G.WorldMapFrame and _G.WorldMapFrame.Show then
         pcall(_G.WorldMapFrame.Show, _G.WorldMapFrame)
     end
 
-    if QuestMapFrame_OpenToQuestDetails then
-        pcall(QuestMapFrame_OpenToQuestDetails, questID)
+    if _G.QuestMapFrame_OpenToQuestDetails then
+        pcall(_G.QuestMapFrame_OpenToQuestDetails, questID)
     end
 
     -- Prefer quest super-tracking (same behavior as clicking the default icon).
     -- Fall back to user waypoint only when quest super-track API is unavailable.
     if not superTrackedQuest then
         local mapID, x, y = TryGetPreyQuestWaypoint(questID)
-        if mapID and x and y and C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates then
-            local okWaypoint, waypointPoint = pcall(UiMapPoint.CreateFromCoordinates, mapID, x, y)
+        if mapID and x and y and C_Map and C_Map.SetUserWaypoint and _G.UiMapPoint and _G.UiMapPoint.CreateFromCoordinates then
+            local okWaypoint, waypointPoint = pcall(_G.UiMapPoint.CreateFromCoordinates, mapID, x, y)
             waypointPoint = okWaypoint and waypointPoint or nil
             if waypointPoint then
                 pcall(C_Map.SetUserWaypoint, waypointPoint)
@@ -3779,7 +2776,8 @@ ApplyDefaultPreyIconVisibility = function()
         return
     end
 
-    local preyWidgetType = GetWidgetTypePreyHuntProgress()
+    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
+        or PREY_WIDGET_TYPE
     local suppressEncounter = settings.disableDefaultPreyIcon == true and ShouldSuppressDefaultPreyEncounter()
 
     local containerGlobals = {
@@ -3818,55 +2816,23 @@ ApplyDefaultPreyIconVisibility = function()
     end
 end
 
-local function FormatMemoryKB(value)
-    return string.format("%.1f", value or 0)
-end
-
-local function PrintMemoryUsage()
-    if not collectgarbage then
-        print("Preydator: collectgarbage API unavailable.")
-        return
-    end
-
-    local before = collectgarbage("count")
-    collectgarbage("collect")
-    local after = collectgarbage("count")
-    local delta = before - after
-
-    print("Preydator memory (KB): before=" .. FormatMemoryKB(before) .. " afterGC=" .. FormatMemoryKB(after) .. " reclaimed=" .. FormatMemoryKB(delta))
-end
-
-local function BuildStageSoundPlayedSummary()
-    local parts = {}
-    for stage = 1, MAX_STAGE do
-        parts[#parts + 1] = tostring(stage) .. "=" .. tostring(state.stageSoundPlayed and state.stageSoundPlayed[stage] == true)
-    end
-    return table.concat(parts, ", ")
-end
-
-local function TrimText(value, maxLen)
-    if type(value) ~= "string" then
-        return ""
-    end
-
-    maxLen = tonumber(maxLen) or 80
-    if #value <= maxLen then
-        return value
-    end
-
-    return string.sub(value, 1, maxLen - 3) .. "..."
-end
-
 NormalizeSoundSettings = function()
     if type(settings.soundFileNames) ~= "table" then
         settings.soundFileNames = {}
     end
 
+    local runtime = GetRuntimeModule("SoundsRuntime")
+
     local mergedNames = {}
     local seen = {}
 
     local function pushFileName(fileName)
-        local normalized = NormalizeSoundFileName(fileName)
+        local normalized = nil
+        if runtime and type(runtime.NormalizeSoundFileName) == "function" then
+            normalized = runtime:NormalizeSoundFileName(fileName, {
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+            })
+        end
         if not normalized or seen[normalized] then
             return
         end
@@ -3884,15 +2850,32 @@ NormalizeSoundSettings = function()
 
     for stage = 1, MAX_STAGE do
         local existingPath = settings.stageSounds and settings.stageSounds[stage]
-        pushFileName(ExtractAddonSoundFileName(existingPath))
+        local extracted = nil
+        if runtime and type(runtime.ExtractAddonSoundFileName) == "function" then
+            extracted = runtime:ExtractAddonSoundFileName(existingPath, {
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+            })
+        end
+        pushFileName(extracted)
     end
 
-    pushFileName(ExtractAddonSoundFileName(settings.ambushSoundPath))
+    local extractedAmbush = nil
+    if runtime and type(runtime.ExtractAddonSoundFileName) == "function" then
+        extractedAmbush = runtime:ExtractAddonSoundFileName(settings.ambushSoundPath, {
+            soundFolderPrefix = SOUND_FOLDER_PREFIX,
+        })
+    end
+    pushFileName(extractedAmbush)
     settings.soundFileNames = mergedNames
 
     local allowedPathLower = {}
     for _, fileName in ipairs(settings.soundFileNames) do
-        local fullPath = BuildAddonSoundPath(fileName)
+        local fullPath = nil
+        if runtime and type(runtime.BuildAddonSoundPath) == "function" then
+            fullPath = runtime:BuildAddonSoundPath(fileName, {
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+            })
+        end
         if type(fullPath) == "string" and fullPath ~= "" then
             allowedPathLower[string.lower(fullPath)] = true
         end
@@ -3917,11 +2900,17 @@ NormalizeSoundSettings = function()
 
         if configuredPath ~= "__NONE__" then
             if type(configuredPath) ~= "string" or configuredPath == "" then
-                configuredPath = GetDefaultStageSoundPath(stage)
+                configuredPath = (stage == 1 and ALERT_SOUND_PATH)
+                    or (stage == 2 and AMBUSH_SOUND_PATH)
+                    or (stage == 3 and TORMENT_SOUND_PATH)
+                    or (stage == 4 and KILL_SOUND_PATH)
             end
 
             if type(configuredPath) ~= "string" or not allowedPathLower[string.lower(configuredPath)] then
-                configuredPath = GetDefaultStageSoundPath(stage)
+                configuredPath = (stage == 1 and ALERT_SOUND_PATH)
+                    or (stage == 2 and AMBUSH_SOUND_PATH)
+                    or (stage == 3 and TORMENT_SOUND_PATH)
+                    or (stage == 4 and KILL_SOUND_PATH)
             end
         end
 
@@ -3934,6 +2923,12 @@ NormalizeSoundSettings = function()
         settings.ambushSoundPath = KILL_SOUND_PATH
     end
 
+    if settings.bloodyCommandSoundPath ~= "__NONE__"
+        and (type(settings.bloodyCommandSoundPath) ~= "string" or not allowedPathLower[string.lower(settings.bloodyCommandSoundPath)])
+    then
+        settings.bloodyCommandSoundPath = KILL_SOUND_PATH
+    end
+
     settings.stageSounds[5] = nil
 end
 
@@ -3943,6 +2938,7 @@ local function ResetAllSettings()
     end
 
     ApplyDefaults(settings, DEFAULTS)
+    NormalizeTransientSettings()
     NormalizeLabelSettings()
     NormalizeColorSettings()
     NormalizeDisplaySettings()
@@ -3950,9 +2946,10 @@ local function ResetAllSettings()
     NormalizeAmbushSettings()
     NormalizeSoundSettings()
 
-    state.forceShowBar = settings.forceShowBar
+    state.forceShowBar = false
     state.stageSoundPlayed = {}
     state.stageSoundAttempted = {}
+    ClearBloodyCommandAlert()
 
     ApplyBarSettings()
     UpdateBarDisplay()
@@ -3960,734 +2957,6 @@ local function ResetAllSettings()
     if UI.optionsPanel and UI.optionsPanel.PreydatorRefreshControls then
         UI.optionsPanel.PreydatorRefreshControls()
     end
-end
-
-local function FrameHasScriptSafe(frameRef, scriptName)
-    if not frameRef or type(scriptName) ~= "string" or not frameRef.HasScript then
-        return false
-    end
-
-    local ok, hasScript = pcall(frameRef.HasScript, frameRef, scriptName)
-    if not ok then
-        return false
-    end
-
-    return hasScript and true or false
-end
-
-local function CollectVisualHintNames(frameRef, maxHints)
-    if not frameRef then
-        return ""
-    end
-
-    maxHints = tonumber(maxHints) or 8
-    local hints = {}
-    local seenHints = {}
-    local visited = {}
-
-    local function maybeAddName(name)
-        if type(name) ~= "string" or name == "" then
-            return
-        end
-
-        local lowered = string.lower(name)
-        if string.find(lowered, "anim", 1, true)
-            or string.find(lowered, "glow", 1, true)
-            or string.find(lowered, "pulse", 1, true)
-            or string.find(lowered, "spark", 1, true)
-            or string.find(lowered, "flare", 1, true)
-            or string.find(lowered, "shine", 1, true)
-        then
-            if not seenHints[name] then
-                seenHints[name] = true
-                hints[#hints + 1] = name
-            end
-        end
-    end
-
-    local function scan(node, depth)
-        if not node or visited[node] or depth > 4 or #hints >= maxHints then
-            return
-        end
-
-        visited[node] = true
-        if node.GetName then
-            maybeAddName(node:GetName())
-        end
-
-        if node.GetRegions then
-            local regions = { node:GetRegions() }
-            for _, region in ipairs(regions) do
-                if region and region.GetName then
-                    maybeAddName(region:GetName())
-                    if #hints >= maxHints then
-                        return
-                    end
-                end
-            end
-        end
-
-        if node.GetChildren then
-            local children = { node:GetChildren() }
-            for _, child in ipairs(children) do
-                scan(child, depth + 1)
-                if #hints >= maxHints then
-                    return
-                end
-            end
-        end
-    end
-
-    scan(frameRef, 0)
-    return table.concat(hints, ", ")
-end
-
-local function CollectFramesNearPoint(pointX, pointY, radius, maxMatches)
-    local entries = {}
-    local scanned = 0
-
-    if type(pointX) ~= "number" or type(pointY) ~= "number" or type(EnumerateFrames) ~= "function" then
-        return entries, scanned
-    end
-
-    radius = math.max(1, tonumber(radius) or 80)
-    maxMatches = math.max(1, tonumber(maxMatches) or 20)
-    local limit = 4000
-    local frameRef = EnumerateFrames()
-
-    while frameRef and scanned < limit and #entries < maxMatches do
-        scanned = scanned + 1
-
-        local isShown = false
-        if frameRef.IsShown then
-            local okShown, shownValue = pcall(frameRef.IsShown, frameRef)
-            isShown = okShown and shownValue and true or false
-        end
-
-        if isShown then
-            local left, right, top, bottom = nil, nil, nil, nil
-            if frameRef.GetRect then
-                local okRect, l, b, w, h = pcall(frameRef.GetRect, frameRef)
-                if okRect and l and b and w and h then
-                    left = l
-                    right = l + w
-                    bottom = b
-                    top = b + h
-                end
-            end
-
-            local overlapsProbe = false
-            if left and right and top and bottom then
-                overlapsProbe = (right >= (pointX - radius))
-                    and (left <= (pointX + radius))
-                    and (top >= (pointY - radius))
-                    and (bottom <= (pointY + radius))
-            end
-
-            if overlapsProbe then
-                local name = "<unnamed>"
-                if frameRef.GetName then
-                    local okName, resolvedName = pcall(frameRef.GetName, frameRef)
-                    if okName and type(resolvedName) == "string" and resolvedName ~= "" then
-                        name = resolvedName
-                    end
-                end
-
-                local centerX, centerY = nil, nil
-                if frameRef.GetCenter then
-                    local okCenter, cx, cy = pcall(frameRef.GetCenter, frameRef)
-                    if okCenter then
-                        centerX = cx
-                        centerY = cy
-                    end
-                end
-
-                local dx = (type(centerX) == "number") and (centerX - pointX) or nil
-                local dy = (type(centerY) == "number") and (centerY - pointY) or nil
-
-                local strata = "?"
-                if frameRef.GetFrameStrata then
-                    local okStrata, strataValue = pcall(frameRef.GetFrameStrata, frameRef)
-                    if okStrata and strataValue ~= nil then
-                        strata = tostring(strataValue)
-                    end
-                end
-
-                local level = "?"
-                if frameRef.GetFrameLevel then
-                    local okLevel, levelValue = pcall(frameRef.GetFrameLevel, frameRef)
-                    if okLevel and levelValue ~= nil then
-                        level = tostring(levelValue)
-                    end
-                end
-
-                local alpha = "?"
-                if frameRef.GetAlpha then
-                    local okAlpha, alphaValue = pcall(frameRef.GetAlpha, frameRef)
-                    if okAlpha and alphaValue ~= nil then
-                        alpha = tostring(alphaValue)
-                    end
-                end
-
-                local mouseEnabled = false
-                if frameRef.IsMouseEnabled then
-                    local okMouse, mouseValue = pcall(frameRef.IsMouseEnabled, frameRef)
-                    mouseEnabled = okMouse and mouseValue and true or false
-                end
-
-                local movable = false
-                if frameRef.IsMovable then
-                    local okMovable, movableValue = pcall(frameRef.IsMovable, frameRef)
-                    movable = okMovable and movableValue and true or false
-                end
-
-                entries[#entries + 1] = {
-                    name = name,
-                    strata = strata,
-                    level = level,
-                    alpha = alpha,
-                    mouse = mouseEnabled,
-                    movable = movable,
-                    dx = dx,
-                    dy = dy,
-                }
-            end
-        end
-
-        frameRef = EnumerateFrames(frameRef)
-    end
-
-    table.sort(entries, function(a, b)
-        local adx = type(a.dx) == "number" and math.abs(a.dx) or 999999
-        local ady = type(a.dy) == "number" and math.abs(a.dy) or 999999
-        local bdx = type(b.dx) == "number" and math.abs(b.dx) or 999999
-        local bdy = type(b.dy) == "number" and math.abs(b.dy) or 999999
-        return (adx + ady) < (bdx + bdy)
-    end)
-
-    return entries, scanned
-end
-
-local function CollectWidgetTreeSnapshot(rootFrame, maxEntries)
-    local rows = {}
-    if not rootFrame then
-        return rows
-    end
-
-    maxEntries = math.max(1, tonumber(maxEntries) or 18)
-    local visited = {}
-
-    local function safeGetName(node)
-        if node and node.GetName then
-            local ok, value = pcall(node.GetName, node)
-            if ok and type(value) == "string" and value ~= "" then
-                return value
-            end
-        end
-        return "<unnamed>"
-    end
-
-    local function safeGetObjectType(node)
-        if node and node.GetObjectType then
-            local ok, value = pcall(node.GetObjectType, node)
-            if ok and value then
-                return tostring(value)
-            end
-        end
-        return "?"
-    end
-
-    local function safeGetAlpha(node)
-        if node and node.GetAlpha then
-            local ok, value = pcall(node.GetAlpha, node)
-            if ok and value ~= nil then
-                return tostring(value)
-            end
-        end
-        return "?"
-    end
-
-    local function safeIsShown(node)
-        if node and node.IsShown then
-            local ok, value = pcall(node.IsShown, node)
-            return ok and value and true or false
-        end
-        return false
-    end
-
-    local function animSummary(node)
-        if not node or not node.GetAnimationGroups then
-            return "none"
-        end
-
-        local ok, groups = pcall(function()
-            return { node:GetAnimationGroups() }
-        end)
-        if not ok or type(groups) ~= "table" or #groups == 0 then
-            return "none"
-        end
-
-        local playing = 0
-        for _, group in ipairs(groups) do
-            if group and group.IsPlaying then
-                local okPlaying, isPlaying = pcall(group.IsPlaying, group)
-                if okPlaying and isPlaying then
-                    playing = playing + 1
-                end
-            end
-        end
-
-        return tostring(#groups) .. " groups, playing=" .. tostring(playing)
-    end
-
-    local function scan(node, depth)
-        if not node or visited[node] or #rows >= maxEntries or depth > 5 then
-            return
-        end
-
-        visited[node] = true
-        local name = safeGetName(node)
-        local objectType = safeGetObjectType(node)
-        local lowered = string.lower(name)
-        local isInteresting = depth <= 1
-            or string.find(lowered, "anim", 1, true) ~= nil
-            or string.find(lowered, "glow", 1, true) ~= nil
-            or string.find(lowered, "model", 1, true) ~= nil
-            or objectType == "ModelScene"
-            or objectType == "Model"
-            or objectType == "PlayerModel"
-
-        if isInteresting then
-            rows[#rows + 1] = string.format(
-                "depth=%d name=%s type=%s shown=%s alpha=%s anim=%s",
-                depth,
-                name,
-                objectType,
-                tostring(safeIsShown(node)),
-                safeGetAlpha(node),
-                animSummary(node)
-            )
-        end
-
-        if node.GetRegions and #rows < maxEntries then
-            local okRegions, regions = pcall(function()
-                return { node:GetRegions() }
-            end)
-            if okRegions and type(regions) == "table" then
-                for _, region in ipairs(regions) do
-                    if #rows >= maxEntries then
-                        break
-                    end
-                    scan(region, depth + 1)
-                end
-            end
-        end
-
-        if node.GetChildren and #rows < maxEntries then
-            local okChildren, children = pcall(function()
-                return { node:GetChildren() }
-            end)
-            if okChildren and type(children) == "table" then
-                for _, child in ipairs(children) do
-                    if #rows >= maxEntries then
-                        break
-                    end
-                    scan(child, depth + 1)
-                end
-            end
-        end
-    end
-
-    scan(rootFrame, 0)
-    return rows
-end
-
-local function SendInspectReportToErrorHandler(reportText)
-    -- Legacy inspect path is intentionally disabled while we validate module-only diagnostics.
-    if true then
-        return false, "legacy inspect reporter disabled"
-    end
-
-    local function SafeToString(value)
-        local ok, converted = pcall(tostring, value)
-        if ok then
-            return converted
-        end
-
-        return "<tostring failed>"
-    end
-
-    if type(reportText) ~= "string" or reportText == "" then
-        return false, "empty report"
-    end
-
-    if type(geterrorhandler) ~= "function" then
-        return false, "geterrorhandler unavailable"
-    end
-
-    local okGetHandler, handler = pcall(geterrorhandler)
-    if not okGetHandler or handler == nil then
-        return false, "error handler unavailable"
-    end
-
-    local header = "Preydator Inspect Report"
-    local chunkSize = 1800
-    local length = #reportText
-    local chunks = math.max(1, math.ceil(length / chunkSize))
-    for index = 1, chunks do
-        local startPos = ((index - 1) * chunkSize) + 1
-        local endPos = math.min(index * chunkSize, length)
-        local chunk = string.sub(reportText, startPos, endPos)
-        local payload = string.format("%s [%d/%d]\n%s", header, index, chunks, chunk)
-
-        local okSend, sendErr = pcall(function()
-            handler(payload)
-        end)
-
-        if not okSend then
-            return false, "handler failed on chunk " .. SafeToString(index) .. ": " .. SafeToString(sendErr)
-        end
-    end
-
-    return true, "sent"
-end
-
-local function PrintInspectState(outputMode)
-    -- Keep this function in place for compatibility, but route users to module inspect.
-    if true then
-        print("Preydator: Legacy inspect path is disabled. Use '/pd inspect' from DebugInspect.")
-        return
-    end
-
-    outputMode = string.lower(tostring(outputMode or "chat"))
-    EnsureBar()
-    UpdateBarDisplay()
-
-    local lines = {}
-    local function add(line)
-        lines[#lines + 1] = tostring(line or "")
-    end
-
-    local now = GetTime and GetTime() or 0
-    local liveQuestID = GetCurrentActivePreyQuest()
-    local hasActiveQuest = IsValidQuestID(liveQuestID)
-    local questOnLog = IsQuestStillActive(liveQuestID)
-    local questCompleted = false
-    if hasActiveQuest and C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
-        questCompleted = C_QuestLog.IsQuestFlaggedCompleted(liveQuestID) and true or false
-    end
-
-    local playerMapID = nil
-    if C_Map and C_Map.GetBestMapForUnit then
-        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
-        local okNumericMapID, numericMapID = pcall(function()
-            return tonumber(rawPlayerMapID)
-        end)
-        playerMapID = (okPlayerMapID and okNumericMapID and numericMapID and numericMapID > 0) and numericMapID or nil
-    end
-    local playerMapName = nil
-    if playerMapID and C_Map and C_Map.GetMapInfo then
-        local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
-        mapInfo = okMapInfo and mapInfo or nil
-        playerMapName = mapInfo and mapInfo.name or nil
-    end
-
-    local shownWidgets = 0
-    local objectivePct = ExtractQuestObjectivePercent(liveQuestID)
-    local objectives = (hasActiveQuest and C_QuestLog and C_QuestLog.GetQuestObjectives) and C_QuestLog.GetQuestObjectives(liveQuestID) or nil
-    local preyWidgetType = GetWidgetTypePreyHuntProgress()
-    local shownStateShown = GetShownStateShown()
-    local suppressEncounter = settings and settings.disableDefaultPreyIcon == true and ShouldSuppressDefaultPreyEncounter()
-    local inspectSuppressionStage = GetStageFromState(state and state.progressState)
-    local allowStageFourMapClickFallback = settings
-        and settings.disableDefaultPreyIcon == true
-        and state
-        and state.stage == MAX_STAGE
-    local barMouseEnabled = UI.barFrame and UI.barFrame.IsMouseEnabled and UI.barFrame:IsMouseEnabled() or false
-    local waypointMapID, waypointX, waypointY = TryGetPreyQuestWaypoint(liveQuestID)
-    local canResolveWaypoint = waypointMapID and waypointX and waypointY
-
-    add("Preydator Inspect (" .. INSPECT_VERSION .. ") | addon=" .. tostring((C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("Preydator", "Version")) or "?"))
-    add("- time=" .. string.format("%.3f", now) .. " | zone=" .. tostring(GetZoneText and GetZoneText() or "?") .. " | playerMapID=" .. tostring(playerMapID) .. " | playerMap=" .. tostring(playerMapName))
-    add("- quest live=" .. tostring(liveQuestID) .. " | hasActive=" .. tostring(hasActiveQuest) .. " | isOnQuest=" .. tostring(questOnLog) .. " | completed=" .. tostring(questCompleted))
-    add("- quest tracked=" .. tostring(state.activeQuestID) .. " | progressState=" .. tostring(state.progressState) .. " | progressPercent=" .. tostring(state.progressPercent) .. " | stage=" .. tostring(state.stage) .. " (" .. tostring(GetStageLabel(state.stage)) .. ")")
-    add("- prey target=" .. tostring(state.preyTargetName) .. " | difficulty=" .. tostring(state.preyTargetDifficulty) .. " | ambushAlertRemaining=" .. string.format("%.2f", math.max(0, (state.ambushAlertUntil or 0) - now)))
-    add("- preyZone mapID=" .. tostring(state.preyZoneMapID) .. " | preyZoneName=" .. tostring(state.preyZoneName) .. " | inPreyZone=" .. tostring(state.inPreyZone))
-    add("- killStageRemaining=" .. string.format("%.2f", math.max(0, (state.killStageUntil or 0) - now)) .. " | lastWidgetAge=" .. string.format("%.2f", math.max(0, now - (state.lastWidgetSeenAt or 0))))
-    add("- sounds enabled=" .. tostring(settings and settings.soundsEnabled) .. " | channel=" .. tostring(settings and settings.soundChannel) .. " | stagePlayed={" .. BuildStageSoundPlayedSummary() .. "}")
-    add("- percent source=" .. tostring(state.lastPercentSource) .. " | fallbackMode=" .. tostring(settings and settings.percentFallbackMode) .. " | objectivePct=" .. tostring(objectivePct))
-    add("- map waypoint found=" .. tostring(canResolveWaypoint and true or false)
-        .. " | mapID=" .. tostring(waypointMapID)
-        .. " | x=" .. tostring(waypointX)
-        .. " | y=" .. tostring(waypointY))
-    if type(objectives) == "table" and #objectives > 0 then
-        local shown = 0
-        for index, objective in ipairs(objectives) do
-            if type(objective) == "table" then
-                shown = shown + 1
-                if shown > 4 then
-                    add("  objective ... (" .. tostring(#objectives - 4) .. " more)")
-                    break
-                end
-
-                add("  objective " .. tostring(index)
-                    .. " fulfilled=" .. tostring(objective.numFulfilled or objective.fulfilled)
-                    .. " required=" .. tostring(objective.numRequired or objective.required)
-                    .. " finished=" .. tostring(objective.finished)
-                    .. " text='" .. TrimText(objective.text, 80) .. "'")
-            end
-        end
-    else
-        add("  objective none")
-    end
-    add("- bar shown=" .. tostring(UI.barFrame and UI.barFrame:IsShown() or false)
-        .. " | forceShow=" .. tostring(state.forceShowBar)
-        .. " | onlyShowInPreyZone=" .. tostring(settings and settings.onlyShowInPreyZone))
-    add("- icon hide setting=" .. tostring(settings and settings.disableDefaultPreyIcon)
-        .. " | suppressEncounterNow=" .. tostring(suppressEncounter)
-        .. " | suppressStage=" .. tostring(inspectSuppressionStage)
-        .. " | suppressInZone=" .. tostring(state and state.inPreyZone == true)
-        .. " | stage4MapFallback=" .. tostring(allowStageFourMapClickFallback)
-        .. " | barMouseEnabled=" .. tostring(barMouseEnabled))
-    add("- bar scripts onMouseDown=" .. tostring(FrameHasScriptSafe(UI.barFrame, "OnMouseDown"))
-        .. " | onMouseUp=" .. tostring(FrameHasScriptSafe(UI.barFrame, "OnMouseUp")))
-    add("- map APIs openQuestMap=" .. tostring(OpenQuestMap ~= nil)
-        .. " | toggleWorldMap=" .. tostring(ToggleWorldMap ~= nil)
-        .. " | openQuestDetails=" .. tostring(QuestMapFrame_OpenToQuestDetails ~= nil)
-        .. " | setUserWaypoint=" .. tostring(C_Map and C_Map.SetUserWaypoint ~= nil)
-        .. " | superTrack=" .. tostring(C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint ~= nil))
-    local frameWidth = UI.barFrame and UI.barFrame:GetWidth() or 0
-    local fillWidth = UI.barFill and UI.barFill:GetWidth() or 0
-    local fillPct = 0
-    if frameWidth and frameWidth > 0 then
-        fillPct = (fillWidth / frameWidth) * 100
-    end
-    add("- display pct=" .. tostring(state.lastDisplayPct) .. " | reason=" .. tostring(state.lastDisplayReason)
-        .. " | frameWidth=" .. string.format("%.2f", frameWidth)
-        .. " | fillWidth=" .. string.format("%.2f", fillWidth)
-        .. " | fillPct=" .. string.format("%.2f", fillPct))
-
-    local savedPoint = settings and settings.point or {}
-    add("- point saved="
-        .. " anchor=" .. tostring(savedPoint.anchor)
-        .. " rel=" .. tostring(savedPoint.relativePoint)
-        .. " x=" .. tostring(savedPoint.x)
-        .. " y=" .. tostring(savedPoint.y))
-
-    local livePoint, liveRelativeTo, liveRelativePoint, liveX, liveY = nil, nil, nil, nil, nil
-    if UI.barFrame and UI.barFrame.GetPoint then
-        livePoint, liveRelativeTo, liveRelativePoint, liveX, liveY = UI.barFrame:GetPoint(1)
-    end
-    local liveRelativeName = "nil"
-    if liveRelativeTo == UIParent then
-        liveRelativeName = "UIParent"
-    elseif liveRelativeTo ~= nil then
-        liveRelativeName = tostring(liveRelativeTo)
-    end
-    add("- point live="
-        .. " anchor=" .. tostring(livePoint)
-        .. " relTo=" .. tostring(liveRelativeName)
-        .. " rel=" .. tostring(liveRelativePoint)
-        .. " x=" .. tostring(liveX)
-        .. " y=" .. tostring(liveY))
-
-    local frameScale = UI.barFrame and UI.barFrame.GetScale and UI.barFrame:GetScale() or 1
-    local frameEffectiveScale = UI.barFrame and UI.barFrame.GetEffectiveScale and UI.barFrame:GetEffectiveScale() or 1
-    local frameCenterX = UI.barFrame and UI.barFrame.GetCenter and select(1, UI.barFrame:GetCenter()) or nil
-    local frameCenterY = UI.barFrame and UI.barFrame.GetCenter and select(2, UI.barFrame:GetCenter()) or nil
-    local parentCenterX = UIParent and UIParent.GetCenter and select(1, UIParent:GetCenter()) or nil
-    local parentCenterY = UIParent and UIParent.GetCenter and select(2, UIParent:GetCenter()) or nil
-    local centerDX = (frameCenterX and parentCenterX) and (frameCenterX - parentCenterX) or nil
-    local centerDY = (frameCenterY and parentCenterY) and (frameCenterY - parentCenterY) or nil
-    add("- frame scale=" .. tostring(frameScale)
-        .. " | effectiveScale=" .. tostring(frameEffectiveScale)
-        .. " | centerDX=" .. tostring(centerDX)
-        .. " | centerDY=" .. tostring(centerDY))
-
-    local probePointX = frameCenterX
-    local probePointY = frameCenterY
-    if type(probePointX) ~= "number" and type(parentCenterX) == "number" and type(savedPoint.x) == "number" then
-        probePointX = parentCenterX + savedPoint.x
-    end
-    if type(probePointY) ~= "number" and type(parentCenterY) == "number" and type(savedPoint.y) == "number" then
-        probePointY = parentCenterY + savedPoint.y
-    end
-
-    local nearbyFrames, nearbyScanned = CollectFramesNearPoint(probePointX, probePointY, 80, 18)
-    add("- nearby frame probe="
-        .. " x=" .. tostring(probePointX)
-        .. " y=" .. tostring(probePointY)
-        .. " radius=80"
-        .. " | scanned=" .. tostring(nearbyScanned)
-        .. " | matched=" .. tostring(#nearbyFrames))
-    for index, entry in ipairs(nearbyFrames) do
-        add("  nearby " .. tostring(index)
-            .. " name=" .. tostring(entry.name)
-            .. " strata=" .. tostring(entry.strata)
-            .. " level=" .. tostring(entry.level)
-            .. " alpha=" .. tostring(entry.alpha)
-            .. " mouse=" .. tostring(entry.mouse)
-            .. " movable=" .. tostring(entry.movable)
-            .. " dx=" .. tostring(entry.dx)
-            .. " dy=" .. tostring(entry.dy))
-    end
-
-    add("- frame local=" .. tostring(UI.barFrame) .. " | frame global=" .. tostring(_G.PreydatorProgressBar)
-        .. " | same=" .. tostring(UI.barFrame ~= nil and _G.PreydatorProgressBar ~= nil and UI.barFrame == _G.PreydatorProgressBar))
-
-    if C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID and C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo then
-        for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-            local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
-            if not okWidgets or type(widgets) ~= "table" then
-                okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-            end
-            if type(widgets) == "table" and #widgets > 0 then
-                for _, widget in ipairs(widgets) do
-                    local okType, widgetType = pcall(function() return widget and widget.widgetType end)
-                    local okRawID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
-                    local numericWidgetID = okRawID and tonumber(rawWidgetID) or nil
-                    if okType and widgetType == preyWidgetType and numericWidgetID then
-                        local okInfo, info = pcall(C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo, numericWidgetID)
-                        if okInfo and info and info.shownState == shownStateShown then
-                            shownWidgets = shownWidgets + 1
-                            local pct = ExtractProgressPercent(info, info.tooltip)
-                            local widgetQuestID = ExtractWidgetQuestID(info)
-                            local frameStateParts = {}
-                            local resolvedContainerParts = {}
-                            local framePrefixes = {
-                                "UIWidgetTopCenterContainerFrameWidget",
-                                "UIWidgetObjectiveTrackerContainerFrameWidget",
-                                "UIWidgetBelowMinimapContainerFrameWidget",
-                                "UIWidgetPowerBarContainerFrameWidget",
-                            }
-                            for _, prefix in ipairs(framePrefixes) do
-                                local frameName = prefix .. tostring(numericWidgetID)
-                                local frameRef = _G[frameName]
-                                if frameRef then
-                                    frameStateParts[#frameStateParts + 1] = frameName
-                                        .. "(shown=" .. tostring(frameRef.IsShown and frameRef:IsShown() or false)
-                                        .. ",alpha=" .. tostring(frameRef.GetAlpha and frameRef:GetAlpha() or "?")
-                                        .. ",mouse=" .. tostring(frameRef.IsMouseEnabled and frameRef:IsMouseEnabled() or false)
-                                        .. ",onMouseUp=" .. tostring(FrameHasScriptSafe(frameRef, "OnMouseUp"))
-                                        .. ",drag=" .. tostring(frameRef.IsMovable and frameRef:IsMovable() or false)
-                                        .. ")"
-                                end
-                            end
-
-                            local containerNames = {
-                                "UIWidgetTopCenterContainerFrame",
-                                "UIWidgetObjectiveTrackerContainerFrame",
-                                "UIWidgetBelowMinimapContainerFrame",
-                                "UIWidgetPowerBarContainerFrame",
-                            }
-                            for _, containerName in ipairs(containerNames) do
-                                local container = _G[containerName]
-                                local resolvedFrame = TryGetWidgetFrameByID(container, numericWidgetID)
-                                if resolvedFrame then
-                                    local resolvedName = resolvedFrame.GetName and resolvedFrame:GetName() or "<unnamed>"
-                                    local parentName = "<nil>"
-                                    if resolvedFrame.GetParent then
-                                        local okParent, parent = pcall(resolvedFrame.GetParent, resolvedFrame)
-                                        if okParent and parent then
-                                            parentName = parent.GetName and (parent:GetName() or "<unnamed>") or tostring(parent)
-                                        end
-                                    end
-                                    resolvedContainerParts[#resolvedContainerParts + 1] = containerName
-                                        .. "=>name=" .. tostring(resolvedName)
-                                        .. ",shown=" .. tostring(resolvedFrame.IsShown and resolvedFrame:IsShown() or false)
-                                        .. ",alpha=" .. tostring(resolvedFrame.GetAlpha and resolvedFrame:GetAlpha() or "?")
-                                        .. ",parent=" .. tostring(parentName)
-                                end
-                            end
-                            add("  widget set=" .. tostring(setID) .. " widgetID=" .. tostring(numericWidgetID)
-                                .. " questID=" .. tostring(widgetQuestID)
-                                .. " state=" .. tostring(info.progressState)
-                                .. " pct=" .. tostring(pct)
-                                .. " tooltip='" .. TrimText(info.tooltip, 90) .. "'")
-                            add("    fields: " .. TrimText(SummarizeInfoFields(info), 200))
-                            if #frameStateParts > 0 then
-                                add("    frames: " .. table.concat(frameStateParts, " | "))
-                            end
-                            if #resolvedContainerParts > 0 then
-                                add("    resolvedContainerFrames: " .. table.concat(resolvedContainerParts, " | "))
-                            else
-                                add("    resolvedContainerFrames: none")
-                            end
-
-                            local firstPrefix = "UIWidgetTopCenterContainerFrameWidget" .. tostring(numericWidgetID)
-                            local firstFrameRef = _G[firstPrefix]
-                            if not firstFrameRef then
-                                firstPrefix = "UIWidgetObjectiveTrackerContainerFrameWidget" .. tostring(numericWidgetID)
-                                firstFrameRef = _G[firstPrefix]
-                            end
-                            if not firstFrameRef then
-                                firstPrefix = "UIWidgetBelowMinimapContainerFrameWidget" .. tostring(numericWidgetID)
-                                firstFrameRef = _G[firstPrefix]
-                            end
-                            if not firstFrameRef then
-                                firstPrefix = "UIWidgetPowerBarContainerFrameWidget" .. tostring(numericWidgetID)
-                                firstFrameRef = _G[firstPrefix]
-                            end
-
-                            if firstFrameRef then
-                                local visualHints = CollectVisualHintNames(firstFrameRef, 8)
-                                if visualHints ~= "" then
-                                    add("    visualHints: " .. visualHints)
-                                end
-
-                                local treeSnapshot = CollectWidgetTreeSnapshot(firstFrameRef, 20)
-                                if #treeSnapshot > 0 then
-                                    add("    treeSnapshot=" .. tostring(#treeSnapshot) .. " entries")
-                                    for _, row in ipairs(treeSnapshot) do
-                                        add("      " .. row)
-                                    end
-                                end
-                            end
-
-                            local globalMatches = FindGlobalFramesForWidgetID(numericWidgetID, true)
-                            if #globalMatches > 0 then
-                                local maxPrint = math.min(#globalMatches, 10)
-                                add("    globalWidgetFrames=" .. tostring(#globalMatches) .. " (showing " .. tostring(maxPrint) .. ")")
-                                for i = 1, maxPrint do
-                                    local entry = globalMatches[i]
-                                    local frameName = (entry and entry.name) or "<unnamed>"
-                                    local globalKey = (entry and entry.key) or "?"
-                                    add("      match " .. tostring(i) .. " key=" .. tostring(globalKey) .. " name=" .. tostring(frameName))
-                                end
-                            else
-                                add("    globalWidgetFrames=0")
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if shownWidgets == 0 then
-        add("  widget none shown")
-    end
-
-    local reportText = table.concat(lines, "\n")
-    Preydator.lastInspectReport = reportText
-    _G.PreydatorLastInspectReport = reportText
-
-    if outputMode == "chat" or outputMode == "both" then
-        for _, line in ipairs(lines) do
-            print(line)
-        end
-    end
-
-    if outputMode == "bugsack" or outputMode == "both" then
-        local sent, reason = SendInspectReportToErrorHandler(reportText)
-        if sent then
-            print("Preydator: Inspect report sent to BugSack via error handler. This is intentional diagnostic output, not a runtime addon bug.")
-        else
-            print("Preydator: Could not send inspect report to BugSack: " .. tostring(reason))
-        end
-    end
-
-    print("Preydator: Inspect report cached in PreydatorLastInspectReport (" .. tostring(#lines) .. " lines).")
 end
 
 ExtractWidgetQuestID = function(info)
@@ -4717,8 +2986,9 @@ local function FindPreyWidgetProgressState(activeQuestID)
         return nil
     end
 
-    local preyWidgetType = GetWidgetTypePreyHuntProgress()
-    local shownStateShown = GetShownStateShown()
+    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
+        or PREY_WIDGET_TYPE
+    local shownStateShown = (Enum and Enum.WidgetShownState and Enum.WidgetShownState.Shown) or WIDGET_SHOWN
     local fallbackState, fallbackTooltip, fallbackPct = nil, nil, nil
 
     for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
@@ -4769,7 +3039,33 @@ local function ResetStateForNewQuest(questID)
         state.stageSoundPlayed = {}
         state.stageSoundAttempted = {}
         state.stage = 1
-        state.preyZoneName, state.preyZoneMapID = GetPreyZoneInfo(questID)
+        local runtime = GetRuntimeModule("PreyContextRuntime")
+        if runtime and type(runtime.GetPreyZoneInfo) == "function" then
+            state.preyZoneName, state.preyZoneMapID = runtime:GetPreyZoneInfo(questID, {
+                taskQuestApi = C_TaskQuest,
+                mapApi = C_Map,
+            })
+        else
+            if questID and C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_Map and C_Map.GetMapInfo then
+                local okMapID, rawMapID = pcall(C_TaskQuest.GetQuestZoneID, questID)
+                local okNumericMapID, mapID = pcall(function()
+                    return tonumber(rawMapID)
+                end)
+                mapID = (okMapID and okNumericMapID and mapID and mapID > 0) and mapID or nil
+                if mapID then
+                    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, mapID)
+                    mapInfo = okMapInfo and mapInfo or nil
+                    state.preyZoneName = mapInfo and mapInfo.name or nil
+                    state.preyZoneMapID = mapID
+                else
+                    state.preyZoneName = nil
+                    state.preyZoneMapID = nil
+                end
+            else
+                state.preyZoneName = nil
+                state.preyZoneMapID = nil
+            end
+        end
         state.inPreyZone = nil
         RefreshInPreyZoneStatus(questID, true)
         state.preyTooltipText = nil
@@ -4949,14 +3245,21 @@ function Preydator:ShouldUseActivePolling()
     local needsQuestBootstrap = hasLiveQuest and not hasTrackedQuest
     local inKillCarry = ((state and state.killStageUntil) or 0) > now
     local inAmbushAlert = ((state and state.ambushAlertUntil) or 0) > now
+    local inBloodyCommandAlert = ((state and state.bloodyCommandAlertUntil) or 0) > now
     local inQuestListenBurst = ((state and state.questListenUntil) or 0) > now
-    local inEditPreview = settings and settings.showInEditMode == true and IsEditModePreviewActive() == true
+    local editModeFrame = _G.EditModeManagerFrame
+    local inEditPreview = settings
+        and settings.showInEditMode == true
+        and editModeFrame
+        and editModeFrame.IsShown
+        and editModeFrame:IsShown()
     local forceShowBar = state and state.forceShowBar == true
     local hasHotQuestContext = hasTrackedQuest and state and state.inPreyZone == true
 
     return needsQuestBootstrap
         or inKillCarry
         or inAmbushAlert
+        or inBloodyCommandAlert
         or inQuestListenBurst
         or inEditPreview
         or forceShowBar
@@ -4992,8 +3295,14 @@ function Preydator:SetPollingActive(enabled)
             local now = GetTime and GetTime() or 0
             local inKillCarry = ((state and state.killStageUntil) or 0) > now
             local inAmbushAlert = ((state and state.ambushAlertUntil) or 0) > now
+            local inBloodyCommandAlert = ((state and state.bloodyCommandAlertUntil) or 0) > now
             local inQuestListenBurst = ((state and state.questListenUntil) or 0) > now
-            local inEditPreview = settings and settings.showInEditMode == true and IsEditModePreviewActive() == true
+            local editModeFrame = _G.EditModeManagerFrame
+            local inEditPreview = settings
+                and settings.showInEditMode == true
+                and editModeFrame
+                and editModeFrame.IsShown
+                and editModeFrame:IsShown()
             local recentlySawWidget = (now - ((state and state.lastWidgetSeenAt) or 0)) <= 2.0
             local progressState = tonumber(state and state.progressState)
             local isIdleInZone = IsValidQuestID(state and state.activeQuestID)
@@ -5002,6 +3311,7 @@ function Preydator:SetPollingActive(enabled)
                 and not recentlySawWidget
                 and not inKillCarry
                 and not inAmbushAlert
+                and not inBloodyCommandAlert
                 and not inQuestListenBurst
                 and not (state and state.forceShowBar == true)
                 and not inEditPreview
@@ -5040,16 +3350,22 @@ function Preydator:ApplyRuntimeSettings(nextSettings, emitProfileHook, refreshUi
     EnsureDebugDB()
     debugDB.enabled = settings.debugSounds and true or false
 
+    NormalizeTransientSettings()
     NormalizeSoundSettings()
     NormalizeLabelSettings()
     NormalizeColorSettings()
-    RestoreBarPointFromBackup()
+    do
+        local runtime = GetRuntimeModule("SettingsRuntime")
+        if runtime and type(runtime.RestoreBarPointFromBackup) == "function" then
+            runtime:RestoreBarPointFromBackup(settings)
+        end
+    end
     NormalizeDisplaySettings()
     NormalizeProgressSettings()
     NormalizeAmbushSettings()
     ApplyDefaultPreyIconVisibility()
 
-    state.forceShowBar = settings.forceShowBar
+    state.forceShowBar = false
 
     if refreshUi then
         ApplyBarSettings()
@@ -5079,23 +3395,6 @@ local function OnAddonLoaded()
     AddDebugLog("OnAddonLoaded", "debug=" .. tostring(debugDB.enabled) .. " | stage" .. tostring(MAX_STAGE) .. "=" .. tostring(settings.stageSounds[MAX_STAGE]), true)
 
     state.pollingActive = false
-
-    frame:RegisterEvent("PLAYER_LOGIN")
-    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    frame:RegisterEvent("UPDATE_UI_WIDGET")
-    frame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
-    frame:RegisterEvent("QUEST_TURNED_IN")
-    frame:RegisterEvent("CHAT_MSG_SYSTEM")
-    frame:RegisterEvent("CHAT_MSG_MONSTER_SAY")
-    frame:RegisterEvent("CHAT_MSG_MONSTER_YELL")
-    frame:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
-    frame:RegisterEvent("RAID_BOSS_EMOTE")
-    frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
-    frame:RegisterEvent("QUEST_DETAIL")
-    frame:RegisterEvent("QUEST_ACCEPTED")
-    frame:RegisterEvent("ZONE_CHANGED")
-    frame:RegisterEvent("ZONE_CHANGED_INDOORS")
-    frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 
     RunModuleHook("OnAddonLoaded")
 end
@@ -5579,7 +3878,7 @@ EnsureOptionsPanel = function()
     addCustomSoundButton:SetPoint("TOPLEFT", panel, "TOPLEFT", 20, -743)
     addCustomSoundButton:SetText("Add File")
     addCustomSoundButton:SetScript("OnClick", function()
-        local ok, message = AddSoundFileName(customSoundEdit:GetText())
+        local ok, message = Preydator.API.AddSoundFileName(customSoundEdit:GetText())
         if not ok then
             print("Preydator: " .. tostring(message))
             return
@@ -5597,7 +3896,7 @@ EnsureOptionsPanel = function()
     removeCustomSoundButton:SetPoint("TOPLEFT", panel, "TOPLEFT", 130, -743)
     removeCustomSoundButton:SetText("Remove File")
     removeCustomSoundButton:SetScript("OnClick", function()
-        local ok, message = RemoveSoundFileName(customSoundEdit:GetText())
+        local ok, message = Preydator.API.RemoveSoundFileName(customSoundEdit:GetText())
         if not ok then
             print("Preydator: " .. tostring(message))
             return
@@ -5712,28 +4011,36 @@ EnsureOptionsPanel = function()
         end
     end)
 
-    local stage1SoundDropdown = AddDropdown(panel, "Stage 1 Sound", 320, -191, 170, BuildSoundDropdownOptions, function()
+    local stage1SoundDropdown = AddDropdown(panel, "Stage 1 Sound", 320, -191, 170, function()
+        return Preydator.API.BuildSoundDropdownOptions()
+    end, function()
         return settings.stageSounds[1]
     end, function(key)
         settings.stageSounds[1] = key
         NormalizeSoundSettings()
     end)
 
-    local stage2SoundDropdown = AddDropdown(panel, "Stage 2 Sound", 320, -243, 170, BuildSoundDropdownOptions, function()
+    local stage2SoundDropdown = AddDropdown(panel, "Stage 2 Sound", 320, -243, 170, function()
+        return Preydator.API.BuildSoundDropdownOptions()
+    end, function()
         return settings.stageSounds[2]
     end, function(key)
         settings.stageSounds[2] = key
         NormalizeSoundSettings()
     end)
 
-    local stage3SoundDropdown = AddDropdown(panel, "Stage 3 Sound", 320, -295, 170, BuildSoundDropdownOptions, function()
+    local stage3SoundDropdown = AddDropdown(panel, "Stage 3 Sound", 320, -295, 170, function()
+        return Preydator.API.BuildSoundDropdownOptions()
+    end, function()
         return settings.stageSounds[3]
     end, function(key)
         settings.stageSounds[3] = key
         NormalizeSoundSettings()
     end)
 
-    local ambushSoundDropdown = AddDropdown(panel, "Ambush Sound", 320, -347, 170, BuildSoundDropdownOptions, function()
+    local ambushSoundDropdown = AddDropdown(panel, "Ambush Sound", 320, -347, 170, function()
+        return Preydator.API.BuildSoundDropdownOptions()
+    end, function()
         return settings.ambushSoundPath
     end, function(key)
         settings.ambushSoundPath = key
@@ -5842,7 +4149,7 @@ EnsureOptionsPanel = function()
         button:SetScript("OnClick", function()
             state.stageSoundPlayed[stageIndex] = nil
             state.stageSoundAttempted[stageIndex] = nil
-            local path = ResolveStageSoundPath(stageIndex)
+            local path = Preydator.API.ResolveStageSoundPath(stageIndex)
             if not path then
                 print("Preydator: No stage " .. stageIndex .. " sound configured.")
                 return
@@ -5931,7 +4238,9 @@ Preydator.API = {
     NormalizeSliderValue = NormalizeSliderValue,
     CreateCheckboxControl = CreateCheckboxControl,
     CreateSliderControl = CreateSliderControl,
-    ApplyBarSettings = ApplyBarSettings,
+    ApplyBarSettings = function()
+        ApplyBarSettings()
+    end,
     UpdateBarDisplay = function()
         UpdateBarDisplay()
     end,
@@ -5969,12 +4278,131 @@ Preydator.API = {
     ResetAllSettings = function()
         ResetAllSettings()
     end,
-    BuildSoundDropdownOptions = BuildSoundDropdownOptions,
-    AddSoundFileName = AddSoundFileName,
-    RemoveSoundFileName = RemoveSoundFileName,
-    ResolveStageSoundPath = ResolveStageSoundPath,
+    BuildSoundDropdownOptions = function()
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.BuildSoundDropdownOptions) == "function" then
+            return runtime:BuildSoundDropdownOptions(settings, {
+                defaultSoundFileNames = DEFAULT_SOUND_FILENAMES,
+                noneLabel = _G.PreydatorL["None"],
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+            })
+        end
+
+        local options = {}
+        local files = (settings and settings.soundFileNames) or DEFAULT_SOUND_FILENAMES
+        options["__NONE__"] = { text = _G.PreydatorL["None"] }
+        for _, fileName in ipairs(files) do
+            local path = SOUND_FOLDER_PREFIX .. tostring(fileName or "")
+            options[path] = { text = tostring(fileName or "") }
+        end
+        return options
+    end,
+    AddSoundFileName = function(fileName)
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.AddSoundFileName) == "function" then
+            return runtime:AddSoundFileName(fileName, settings, {
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+                normalizeSoundSettings = NormalizeSoundSettings,
+            })
+        end
+
+        return false, "Sound runtime is unavailable"
+    end,
+    RemoveSoundFileName = function(fileName)
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.RemoveSoundFileName) == "function" then
+            return runtime:RemoveSoundFileName(fileName, settings, {
+                soundFolderPrefix = SOUND_FOLDER_PREFIX,
+                protectedSoundFileNames = PROTECTED_SOUND_FILENAMES,
+                normalizeSoundSettings = NormalizeSoundSettings,
+            })
+        end
+
+        return false, "Sound runtime is unavailable"
+    end,
+    ResolveStageSoundPath = function(stage)
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.ResolveStageSoundPath) == "function" then
+            return runtime:ResolveStageSoundPath(stage, settings, {
+                addDebugLog = AddDebugLog,
+                getDefaultStageSoundPath = function(stageIndex)
+                    return (stageIndex == 1 and ALERT_SOUND_PATH)
+                        or (stageIndex == 2 and AMBUSH_SOUND_PATH)
+                        or (stageIndex == 3 and TORMENT_SOUND_PATH)
+                        or (stageIndex == 4 and KILL_SOUND_PATH)
+                end,
+            })
+        end
+
+        stage = tonumber(stage)
+        if not stage then
+            AddDebugLog("ResolveStageSoundPath", "invalid stage", false)
+            return nil
+        end
+
+        local defaultPath = (stage == 1 and ALERT_SOUND_PATH)
+            or (stage == 2 and AMBUSH_SOUND_PATH)
+            or (stage == 3 and TORMENT_SOUND_PATH)
+            or (stage == 4 and KILL_SOUND_PATH)
+        if not settings then
+            return defaultPath
+        end
+
+        settings.stageSounds = settings.stageSounds or {}
+        local sounds = settings.stageSounds
+        local savedPath = sounds[stage]
+        if savedPath == "__NONE__" then
+            AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=none", false)
+            return nil
+        end
+        if type(savedPath) == "string" and savedPath ~= "" then
+            AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=saved | path=" .. savedPath, false)
+            return savedPath
+        end
+        if defaultPath and defaultPath ~= "" then
+            sounds[stage] = defaultPath
+            AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=default | path=" .. defaultPath, false)
+            return defaultPath
+        end
+
+        AddDebugLog("ResolveStageSoundPath", "stage=" .. stage .. " | source=none | default=nil", true)
+        return nil
+    end,
     ResolveAmbushSoundPath = function()
-        return ResolveAmbushAlertSoundPath()
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.ResolveAmbushAlertSoundPath) == "function" then
+            return runtime:ResolveAmbushAlertSoundPath(settings, {
+                killSoundPath = KILL_SOUND_PATH,
+            })
+        end
+
+        local path = settings and settings.ambushSoundPath
+        if path == "__NONE__" then
+            return nil
+        end
+        if type(path) == "string" and path ~= "" then
+            return path
+        end
+
+        return KILL_SOUND_PATH
+    end,
+    ResolveBloodyCommandSoundPath = function()
+        local runtime = GetRuntimeModule("SoundsRuntime")
+        if runtime and type(runtime.ResolveBloodyCommandAlertSoundPath) == "function" then
+            return runtime:ResolveBloodyCommandAlertSoundPath(settings, {
+                killSoundPath = KILL_SOUND_PATH,
+            })
+        end
+
+        local path = settings and settings.bloodyCommandSoundPath
+        if path == "__NONE__" then
+            return nil
+        end
+        if type(path) == "string" and path ~= "" then
+            return path
+        end
+
+        return KILL_SOUND_PATH
     end,
     PlayTestSound = function(path)
         return TryPlaySound(path, true)
@@ -5982,8 +4410,114 @@ Preydator.API = {
     TryPlayStageSound = function(stageIndex, force)
         return TryPlayStageSound(stageIndex, force)
     end,
+    GetModuleRuntimeState = function()
+        local runtime = {
+            settings = settings,
+            barEnabled = true,
+            soundsEnabled = true,
+            soundsRuntimeEnabled = (settings and settings.soundsEnabled ~= false) and true or false,
+        }
+
+        local customization = Preydator.GetModule and Preydator:GetModule("CustomizationStateV2")
+        if customization and type(customization.IsModuleEnabled) == "function" then
+            runtime.barEnabled = customization:IsModuleEnabled("bar") == true
+            runtime.soundsEnabled = customization:IsModuleEnabled("sounds") == true
+            runtime.soundsRuntimeEnabled = runtime.soundsEnabled and runtime.soundsRuntimeEnabled
+        end
+
+        return runtime
+    end,
+    SetBarRuntimeHandlers = function(handlers)
+        if type(handlers) ~= "table" then
+            return
+        end
+
+        if type(handlers.ApplyBarSettings) == "function" then
+            BarRuntimeApplyHandler = handlers.ApplyBarSettings
+        end
+
+        if type(handlers.UpdateBarDisplay) == "function" then
+            BarRuntimeUpdateHandler = handlers.UpdateBarDisplay
+        end
+    end,
+    GetBarRuntimeContext = function()
+        return {
+            UI = UI,
+            settings = settings,
+            state = state,
+            defaults = DEFAULTS,
+            constants = Preydator.Constants,
+            fillInset = FILL_INSET,
+            maxTickMarks = MAX_TICK_MARKS,
+            clamp = Clamp,
+            round = Round,
+            getTime = function()
+                return (GetTime and GetTime()) or 0
+            end,
+            getModule = function(moduleName)
+                return Preydator:GetModule(moduleName)
+            end,
+            runModuleHook = RunModuleHook,
+            ensureBar = EnsureBar,
+            applyDefaultPreyIconVisibility = ApplyDefaultPreyIconVisibility,
+            isEditModePreviewActive = function()
+                local editModeFrame = _G.EditModeManagerFrame
+                return editModeFrame and editModeFrame.IsShown and editModeFrame:IsShown()
+            end,
+            isRestrictedInstanceForPreyBar = IsRestrictedInstanceForPreyBar,
+            getStageFromState = GetStageFromState,
+            getStageFallbackPercent = function(stage)
+                local mode = (settings and settings.progressSegments) or PROGRESS_SEGMENTS_QUARTERS
+                local stagePercents = STAGE_PCT_BY_SEGMENT[mode] or STAGE_PCT_BY_SEGMENT[PROGRESS_SEGMENTS_QUARTERS]
+                return stagePercents[stage] or 0
+            end,
+            getStageLabel = GetStageLabel,
+            getProgressTickPercents = function()
+                local mode = (settings and settings.progressSegments) or PROGRESS_SEGMENTS_QUARTERS
+                local tickPercents = BAR_TICK_PCTS_BY_SEGMENT[mode]
+                if type(tickPercents) ~= "table" then
+                    return BAR_TICK_PCTS_BY_SEGMENT[PROGRESS_SEGMENTS_QUARTERS]
+                end
+
+                return tickPercents
+            end,
+            getPercentTextLayerSettings = function()
+                local mode = settings and settings.percentDisplay or PERCENT_DISPLAY_INSIDE
+                if settings and settings.orientation == ORIENTATION_VERTICAL and type(settings.verticalPercentDisplay) == "string" then
+                    mode = settings.verticalPercentDisplay
+                end
+
+                if mode == PERCENT_DISPLAY_INSIDE_BELOW then
+                    mode = PERCENT_DISPLAY_INSIDE
+                end
+
+                if mode == PERCENT_DISPLAY_ABOVE_TICKS then
+                    return "OVERLAY", 10
+                end
+
+                return "OVERLAY", 7
+            end,
+            getTickLayerSettings = function()
+                return "OVERLAY", 4
+            end,
+            maxStage = MAX_STAGE,
+            getCurrentActivePreyQuestCached = GetCurrentActivePreyQuestCached,
+            refreshInPreyZoneStatus = RefreshInPreyZoneStatus,
+            isValidQuestID = IsValidQuestID,
+            barPositionUtil = barPositionUtil,
+        }
+    end,
     TriggerAmbushAlert = function(message, source)
         TriggerAmbushAlert(message, source)
+    end,
+    TriggerBloodyCommandAlert = function(spellID, sourceName, source)
+        TriggerBloodyCommandAlert(spellID, sourceName, source)
+    end,
+    ClearBloodyCommandAlert = function()
+        ClearBloodyCommandAlert()
+    end,
+    AddDebugLog = function(kind, message, forcePrint)
+        AddDebugLog(kind, message, forcePrint)
     end,
     OpenLegacyOptionsPanel = function()
         if Settings and Settings.OpenToCategory then
@@ -6003,202 +4537,95 @@ Preydator.API = {
 }
 
 local function HandleSlashCommand(message)
-    message = (message or ""):match("^%s*(.-)%s*$")
-    local command, rest = message:match("^(%S+)%s*(.-)$")
-    local text = string.lower(command or "")
+    local slashModule = GetRuntimeModule("SlashCommands")
+    if slashModule and type(slashModule.HandleSlashCommand) == "function" then
+        slashModule:HandleSlashCommand(message, {
+            ensureDebugDB = EnsureDebugDB,
+            settings = settings,
+            debugDB = debugDB,
+            state = state,
+            updateBarDisplay = UpdateBarDisplay,
+            openOptionsPanel = OpenOptionsPanel,
+            printMemoryUsage = function()
+                local runtime = GetRuntimeModule("DebugRuntime")
+                if runtime and type(runtime.PrintMemoryUsage) == "function" then
+                    runtime:PrintMemoryUsage({
+                        collectgarbageFn = _G.collectgarbage,
+                        printFn = print,
+                    })
+                    return
+                end
 
-    if text == "debug" then
-        EnsureDebugDB()
-        local mode = string.lower(rest or "")
-
-        if mode == "on" then
-            settings.debugSounds = true
-            debugDB.enabled = true
-            print("Preydator: Debug logging enabled.")
-            return
-        end
-
-        if mode == "off" then
-            settings.debugSounds = false
-            debugDB.enabled = false
-            print("Preydator: Debug logging disabled.")
-            return
-        end
-
-        if mode == "clear" then
-            debugDB.entries = {}
-            print("Preydator: Debug log cleared.")
-            return
-        end
-
-        if mode == "show" or mode == "" then
-            local total = #debugDB.entries
-            if total == 0 then
-                print("Preydator: Debug log is empty.")
-                return
-            end
-
-            local fromIndex = math.max(1, total - 19)
-            print("Preydator: Debug log (last " .. (total - fromIndex + 1) .. " of " .. total .. ")")
-            for index = fromIndex, total do
-                print("  " .. debugDB.entries[index])
-            end
-            return
-        end
-
-        print("Preydator: debug commands are 'debug on', 'debug off', 'debug show', 'debug clear'.")
+                print("Preydator: Debug runtime is unavailable.")
+            end,
+            modules = Preydator.modules,
+            printFn = print,
+        })
         return
     end
 
-    if text == "show" then
-        state.forceShowBar = true
-        settings.forceShowBar = true
-        UpdateBarDisplay()
-        print("Preydator: Progress bar forced visible.")
-        return
-    end
-
-    if text == "hide" then
-        state.forceShowBar = false
-        settings.forceShowBar = false
-        UpdateBarDisplay()
-        print("Preydator: Progress bar auto mode restored.")
-        return
-    end
-
-    if text == "toggle" then
-        state.forceShowBar = not state.forceShowBar
-        settings.forceShowBar = state.forceShowBar
-        UpdateBarDisplay()
-        print("Preydator: Progress bar force show = " .. tostring(state.forceShowBar))
-        return
-    end
-
-    if text == "options" or text == "open" then
-        OpenOptionsPanel()
-        return
-    end
-
-    if text == "mem" or text == "memory" then
-        PrintMemoryUsage()
-        return
-    end
-
-    local moduleHandled = false
-    for _, module in pairs(Preydator.modules or {}) do
-        local hook = module and module.OnSlashCommand
-        if type(hook) == "function" then
-            local ok, handled = pcall(hook, module, text, rest, trimmed)
-            if ok and handled == true then
-                moduleHandled = true
-                break
-            end
-        end
-    end
-
-    if moduleHandled then
-        return
-    end
-
-    print("Preydator commands: options | show | hide | toggle | mem | debug <on|off|show|clear> | inspect[ bug|both] | inspectquest [questID] [bug|both]")
+    print("Preydator: Slash command module is unavailable.")
 end
 
 frame:SetScript("OnEvent", function(_, event, arg1, arg2)
+    local runtime = GetRuntimeModule("EventRuntime")
+    if runtime and type(runtime.HandleEvent) == "function" then
+        runtime:HandleEvent(event, arg1, arg2, {
+            addonName = ADDON_NAME,
+            state = state,
+            ui = UI,
+            preyProgressFinal = PREY_PROGRESS_FINAL,
+            activePreyQuestCacheSeconds = ACTIVE_PREY_QUEST_CACHE_SECONDS,
+            onAddonLoaded = OnAddonLoaded,
+            ensureOptionsPanel = EnsureOptionsPanel,
+            handleSlashCommand = HandleSlashCommand,
+            applyBarSettings = ApplyBarSettings,
+            updateBarDisplay = UpdateBarDisplay,
+            runModuleHook = RunModuleHook,
+            ensureBar = EnsureBar,
+            getCustomizationModule = function()
+                return Preydator:GetModule("CustomizationStateV2")
+            end,
+            armQuestListenBurst = ArmQuestListenBurst,
+            getCurrentActivePreyQuestCached = GetCurrentActivePreyQuestCached,
+            updatePreyState = UpdatePreyState,
+            isValidQuestID = IsValidQuestID,
+            isRestrictedInstanceForPreyBar = IsRestrictedInstanceForPreyBar,
+            getTime = GetTime,
+            setPollingActive = function(enabled)
+                Preydator:SetPollingActive(enabled)
+            end,
+            shouldUseActivePolling = function()
+                return Preydator:ShouldUseActivePolling()
+            end,
+        })
+        return
+    end
+
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
         OnAddonLoaded()
         EnsureOptionsPanel()
         SlashCmdList["PREYDATOR"] = HandleSlashCommand
-        return
     end
-
-    if event == "ADDON_LOADED" then
-        return
-    end
-
-    if event == "PLAYER_LOGIN"
-        or event == "PLAYER_ENTERING_WORLD"
-        or event == "ZONE_CHANGED"
-        or event == "ZONE_CHANGED_INDOORS"
-        or event == "ZONE_CHANGED_NEW_AREA" then
-        state.zoneCacheDirty = true
-        if event == "PLAYER_ENTERING_WORLD" and UI.barFrame then
-            ApplyBarSettings()
-        end
-    end
-
-    -- Gate module fanout for noisy UI widget events when no prey context exists.
-    -- Keep this lazy so non-noisy events do not pay quest/cache costs.
-    local isNoisyEvent = event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS"
-    local now
-    if isNoisyEvent then
-        now = GetTime and GetTime() or 0
-        local hasPreyContext = state.activeQuestID or (now < (state.killStageUntil or 0))
-        local outOfZoneQuestIdle = IsValidQuestID(state.activeQuestID)
-            and state.inPreyZone ~= true
-            and not (now < (state.killStageUntil or 0))
-            and not (now < (state.ambushAlertUntil or 0))
-        if hasPreyContext and not outOfZoneQuestIdle then
-            RunModuleHook("OnEvent", event, arg1, arg2)
-        end
-    else
-        RunModuleHook("OnEvent", event, arg1, arg2)
-    end
-
-    if event == "PLAYER_LOGIN" then
-        local custV2 = Preydator:GetModule("CustomizationStateV2")
-        local barEnabled = true
-        if custV2 and type(custV2.IsModuleEnabled) == "function" then
-            barEnabled = custV2:IsModuleEnabled("bar") == true
-        end
-        if barEnabled then
-            EnsureBar()
-            ApplyBarSettings()
-            UpdateBarDisplay()
-        end
-        Preydator:SetPollingActive(Preydator:ShouldUseActivePolling())
-        return
-    end
-
-    if event == "CHAT_MSG_SYSTEM" or event == "CHAT_MSG_MONSTER_SAY" or event == "CHAT_MSG_MONSTER_YELL" or event == "CHAT_MSG_MONSTER_EMOTE" or event == "RAID_BOSS_EMOTE" then
-        if ShouldScanAmbushChat() and IsAmbushSystemMessage(arg1, arg2) then
-            TriggerAmbushAlert(arg1, event)
-        end
-        return
-    end
-
-    if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" or event == "QUEST_DETAIL" or event == "QUEST_ACCEPTED" then
-        ArmQuestListenBurst()
-    end
-
-    if event == "QUEST_TURNED_IN" and state.activeQuestID and arg1 == state.activeQuestID then
-        state.killStageUntil = (GetTime and GetTime() or 0) + 8
-        state.progressState = PREY_PROGRESS_FINAL
-        state.progressPercent = 100
-        UpdateBarDisplay()
-        Preydator:SetPollingActive(true)
-    end
-
-    now = now or (GetTime and GetTime() or 0)
-    local livePreyQuestID = GetCurrentActivePreyQuestCached(isNoisyEvent and ACTIVE_PREY_QUEST_CACHE_SECONDS or 0)
-
-    if not (((state.killStageUntil or 0) > now)
-        or ((state.ambushAlertUntil or 0) > now)
-        or ((state.questListenUntil or 0) > now)
-        or IsValidQuestID(state.activeQuestID)
-        or IsValidQuestID(livePreyQuestID)) then
-        return
-    end
-
-    if isNoisyEvent
-        and IsValidQuestID(state.activeQuestID)
-        and state.inPreyZone ~= true
-        and not ((state.killStageUntil or 0) > now)
-        and not ((state.ambushAlertUntil or 0) > now) then
-        return
-    end
-
-    UpdatePreyState()
-    Preydator:SetPollingActive(Preydator:ShouldUseActivePolling())
 end)
 
+-- Register addon events once during file load so we do not call RegisterEvent from runtime initialization paths.
 frame:RegisterEvent("ADDON_LOADED")
+frame:RegisterEvent("PLAYER_LOGIN")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterEvent("UPDATE_UI_WIDGET")
+frame:RegisterEvent("UPDATE_ALL_UI_WIDGETS")
+frame:RegisterEvent("QUEST_TURNED_IN")
+frame:RegisterEvent("CHAT_MSG_SYSTEM")
+frame:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+frame:RegisterEvent("CHAT_MSG_MONSTER_YELL")
+frame:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
+frame:RegisterEvent("RAID_BOSS_EMOTE")
+frame:RegisterEvent("UNIT_AURA")
+frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
+frame:RegisterEvent("QUEST_DETAIL")
+frame:RegisterEvent("QUEST_ACCEPTED")
+frame:RegisterEvent("ZONE_CHANGED")
+frame:RegisterEvent("ZONE_CHANGED_INDOORS")
+frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+

@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.1.0 - 2026-03-23
+
+### Changed
+- Began core-architecture split by introducing a new `Core/` folder and moving shared runtime alert event handling there.
+- Consolidated Ambush and Bloody Command event routing into one shared core alert file (`Core/Alerts.lua`) so both alert paths are maintained together.
+- Added a dedicated bar runtime module (`Core/BarRuntime.lua`) and routed bar apply/update flows through it so bar display logic stays grouped in one maintenance location.
+- Hardened core alert routing to honor module runtime state, so Ambush/Bloody processing now short-circuits when Bar/Sounds paths are disabled.
+- Started settings-migration extraction by introducing `Core/SettingsRuntime.lua` and delegating normalization/migration paths from `Preydator.lua` with fallback-safe wrappers.
+- Continued core extraction by introducing `Core/SoundsRuntime.lua` and delegating sound-option building, sound-path resolution, and playback helpers from `Preydator.lua` with fallback-safe wrappers.
+- Continued core extraction by introducing `Core/PreyContextRuntime.lua` and delegating prey-zone status refresh, active-prey quest cache helpers, and quest-listen burst arming from `Preydator.lua` with fallback-safe wrappers.
+- Continued monolith split by introducing `Modules/SlashCommands.lua` and delegating slash-command routing from `Preydator.lua` with fallback-safe wrappers.
+- Reduced top-level local pressure in `Preydator.lua` by consolidating multiple runtime-module getter helpers into one generic `GetRuntimeModule()` path.
+- Continued core extraction by introducing `Core/EventRuntime.lua` and delegating top-level event dispatch from `Preydator.lua` via a thin runtime bridge.
+- Continued sound-runtime extraction by moving sound filename/path helper operations (`Normalize/Add/Remove`, addon path build/extract, and sound-key resolution) into `Core/SoundsRuntime.lua` and routing `Preydator.lua` through module wrappers.
+- Continued prey-context extraction by moving prey-zone map lookup and player-map hierarchy checks into `Core/PreyContextRuntime.lua`, removing two more top-level helper locals from `Preydator.lua`.
+- Continued local-pressure reduction by introducing `Core/DebugRuntime.lua` and moving memory/debug formatting helpers out of `Preydator.lua`.
+- Continued local-pressure reduction by collapsing the disabled legacy inspect path in `Preydator.lua` to a compatibility stub and removing its dead helper locals.
+- Continued local-pressure reduction by moving vertical-label formatting helpers into `Core/BarRuntime.lua` and removing three more top-level helper locals from `Preydator.lua`.
+- Continued local-pressure reduction by moving ambush chat-matching helpers into `Core/Alerts.lua` and removing three more top-level helper locals from `Preydator.lua`.
+- Continued local-pressure reduction by deleting the bar-point backup wrapper locals from `Preydator.lua` and calling `Core/SettingsRuntime.lua` directly at the remaining backup/restore sites.
+- Continued local-pressure reduction by deleting five sound-management wrapper locals from `Preydator.lua` and routing the remaining UI/API sound option paths directly through `Core/SoundsRuntime.lua`.
+- Continued local-pressure reduction by deleting the remaining top-level stage-sound resolver wrapper from `Preydator.lua` and routing all stage-sound resolution through `Preydator.API.ResolveStageSoundPath`.
+- Continued local-pressure reduction by deleting the now-unreferenced legacy `PrintInspectState` compatibility stub from `Preydator.lua`.
+- Continued local-pressure reduction by inlining prey-widget enum fallback lookups at call sites and removing two more tiny helper locals from `Preydator.lua`.
+- Continued local-pressure reduction by inlining four BarRuntime context-only utility helpers (`stage fallback`, `tick percents`, `percent text layer`, `tick layer`) and removing their corresponding top-level locals from `Preydator.lua`.
+- Continued local-pressure reduction by removing the top-level `IsEditModePreviewActive` helper and inlining its tiny frame-shown check at direct call sites and in BarRuntime context wiring.
+- Continued local-pressure reduction by inlining default stage-sound path mapping at remaining use sites and removing the top-level `GetDefaultStageSoundPath` helper from `Preydator.lua`.
+- Continued local-pressure reduction by inlining percent normalization/clamp logic at use sites and removing two more tiny top-level helpers from `Preydator.lua`.
+- Continued local-pressure reduction by removing two unused Bloody Command helper leftovers (`BLOODY_COMMAND_SOURCE_NPC_IDS` and `ParseNPCIDFromGUID`) from `Core/Alerts.lua`.
+
+### Added
+- Added shared runtime-state API helper for core modules so Bar/Sounds module gating is derived from one source.
+- Added dedicated Bloody Command alert options in the active Sounds page with separate sound/visual toggles and an independent sound picker/test button. Detection watches Astalor Bloodsworn Bloody Command aura applications on the player and reuses the transient bar alert path without changing prey-stage mappings.
+
+### Fixed
+- Fixed `ADDON_ACTION_FORBIDDEN` on `Frame:RegisterEvent()` by registering core events once at startup instead of re-registering inside runtime initialization.
+- Hardened legacy `forceShowBar` migration by explicitly writing `false` on load, so users with stale persisted `true` values are guaranteed to recover without manual SavedVariables edits.
+- Fixed old persisted debug `forceShowBar` state keeping the prey bar visible everywhere with `Only show in prey zone` enabled and no active prey quest. Force-show is now session-only and stale saved values are cleared on load.
+- Restored the `Progress Segments` (`Thirds` / `Quarters`) dropdown to the active `Bar` settings tab.
+- Restricted Bloody Command alert firing to Nightmare prey difficulty and stage > 1 (stage 4 remains valid), matching intended behavior against non-qualifying prey contexts.
+
 ## 2.0.8 - 2026-03-22
 
 ### Fixed
