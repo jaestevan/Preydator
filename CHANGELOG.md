@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.2 - 2026-03-25
+
+### Changed
+- Unified achievement badge color across all themes to use Protanopia's gold/orange tone for consistent visual distinction and better colorblind accessibility.
+- Changed Hunt Tracker Accept button text to use the standard gold on normal themes while keeping the alternate color treatment on color-blind themes.
+- Changed Warband character column sizing to measure cached character names dynamically so long names no longer truncate with ellipses.
+- Added Hunt Table difficulty color pickers in Panels settings so Normal, Hard, and Nightmare badge colors can be changed directly from the options UI.
+- Added an Achievement Badge color picker in Achievements settings so signal icon/text color can be customized without changing theme presets.
+- Fixed Achievements settings description wrapping so long text stays inside the panel bounds.
+
 ## 2.1.1 - 2026-03-24
 
 ### Changed

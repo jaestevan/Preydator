@@ -245,6 +245,7 @@ local warbandSortAsc = true
 local currencyWhatsNewFrame
 local EnsureCurrencyWindow
 local EnsureWarbandWindow
+local warbandTextMeasure
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -1054,6 +1055,42 @@ local function GetKnownWarbandCharacters()
     end)
 
     return rows
+end
+
+local function EnsureWarbandTextMeasure()
+    if warbandTextMeasure then
+        return warbandTextMeasure
+    end
+
+    local owner = UIParent or CreateFrame("Frame", nil)
+    warbandTextMeasure = owner:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    warbandTextMeasure:Hide()
+    return warbandTextMeasure
+end
+
+local function MeasureWarbandTextWidth(text, fontSize, fontPath)
+    local measure = EnsureWarbandTextMeasure()
+    if measure.SetFont then
+        measure:SetFont(fontPath, fontSize, "")
+    end
+    measure:SetText(text or "")
+    return math.ceil((measure.GetStringWidth and measure:GetStringWidth() or 0) + 8)
+end
+
+local function GetWarbandCharacterColumnWidth(showRealm, fontSize, fontPath)
+    local minWidth = showRealm and 76 or 124
+    local textFontSize = math.max(10, fontSize - 1)
+    local headerFontSize = math.max(10, fontSize - 2)
+    local width = minWidth
+
+    width = math.max(width, MeasureWarbandTextWidth(L["Character"], headerFontSize, fontPath))
+    width = math.max(width, MeasureWarbandTextWidth(L["Totals"], headerFontSize, fontPath))
+
+    for _, entry in ipairs(GetKnownWarbandCharacters()) do
+        width = math.max(width, MeasureWarbandTextWidth(entry.charName, textFontSize, fontPath))
+    end
+
+    return width
 end
 
 -- UI helpers and tracker settings
@@ -2053,6 +2090,7 @@ EnsureCurrencyWindow = function()
     })
     frame:SetBackdropColor(0.03, 0.03, 0.04, 0.98)
     frame:SetBackdropBorderColor(COLOR_BORDER[1], COLOR_BORDER[2], COLOR_BORDER[3], 1)
+    frame:SetClipsChildren(true)
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -2066,12 +2104,13 @@ EnsureCurrencyWindow = function()
     end)
 
     local bg = frame:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
+    bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -4)
+    bg:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
     bg:SetColorTexture(0.02, 0.02, 0.03, 0.94)
 
     local topBar = frame:CreateTexture(nil, "BORDER")
-    topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-    topBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, 0)
+    topBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, 0)
     topBar:SetHeight(26)
     topBar:SetColorTexture(0.20, 0.14, 0.06, 0.95)
 
@@ -2169,6 +2208,7 @@ EnsureWarbandWindow = function()
     })
     frame:SetBackdropColor(0.03, 0.03, 0.04, 0.98)
     frame:SetBackdropBorderColor(0.44, 0.56, 0.80, 1)
+    frame:SetClipsChildren(true)
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -2182,12 +2222,13 @@ EnsureWarbandWindow = function()
     end)
 
     local bg = frame:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
+    bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -4)
+    bg:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
     bg:SetColorTexture(0.02, 0.03, 0.05, 0.94)
 
     local topBar = frame:CreateTexture(nil, "BORDER")
-    topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-    topBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    topBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, 0)
+    topBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, 0)
     topBar:SetHeight(26)
     topBar:SetColorTexture(0.16, 0.20, 0.30, 0.97)
 
@@ -2375,8 +2416,7 @@ local function ApplyWarbandColumnLayout(showRealm, displayRowCount)
     local rowCount = math.max(1, tonumber(displayRowCount) or 0)
 
     local realmWidth = showRealm and 128 or 0
-    local charWidth = showRealm and 76 or 124
-    local maxCharWidth = showRealm and 112 or 148
+    local charWidth = GetWarbandCharacterColumnWidth(showRealm, fontSize, themeFont)
     local maxRealmWidth = showRealm and 188 or 0
     local currencyDefaults = {}
     for _, entry in ipairs(CURRENCY_ALLOW_LIST) do
@@ -2422,7 +2462,7 @@ local function ApplyWarbandColumnLayout(showRealm, displayRowCount)
             widthSlack = widthSlack - realmGrow
         end
         if widthSlack > 0 then
-            charWidth = math.min(maxCharWidth, charWidth + widthSlack)
+            charWidth = charWidth + widthSlack
         end
     end
 
@@ -2544,6 +2584,9 @@ local function RefreshWarbandWindowDisplay()
     local theme = GetWarbandThemePreset()
     local useClassColors = not settings or settings.themeUseClassColors ~= false
     local showRealm = settings and settings.currencyShowRealmInWarband == true
+    if warbandWindow.SetBackdropColor then
+        warbandWindow:SetBackdropColor(theme.section[1], theme.section[2], theme.section[3], theme.section[4] or 1)
+    end
     if warbandWindow.PreydatorBg then
         warbandWindow.PreydatorBg:SetColorTexture(theme.section[1], theme.section[2], theme.section[3], 0.88)
     end
@@ -2844,6 +2887,9 @@ local function RefreshCurrencyWindowDisplay()
     currencyWindow:SetSize(configuredWidth, finalHeight)
     currencyWindow:SetScale(configuredScale)
 
+    if currencyWindow.SetBackdropColor then
+        currencyWindow:SetBackdropColor(theme.section[1], theme.section[2], theme.section[3], theme.section[4] or 1)
+    end
     if currencyWindow.PreydatorBg then
         currencyWindow.PreydatorBg:SetColorTexture(theme.section[1], theme.section[2], theme.section[3], 0.88)
     end

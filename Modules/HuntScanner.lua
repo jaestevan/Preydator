@@ -84,6 +84,12 @@ local panelScrollBar
 local DIFFICULTY_NORMAL = "normal"
 local DIFFICULTY_HARD = "hard"
 local DIFFICULTY_NIGHTMARE = "nightmare"
+local DEFAULT_DIFFICULTY_COLORS = {
+    [DIFFICULTY_NORMAL] = { 0.42, 1.00, 0.56, 1.00 },
+    [DIFFICULTY_HARD] = { 1.00, 0.67, 0.24, 1.00 },
+    [DIFFICULTY_NIGHTMARE] = { 1.00, 0.35, 0.35, 1.00 },
+}
+local DEFAULT_ACHIEVEMENT_BADGE_COLOR = { 1.00, 0.86, 0.00, 1.00 }
 local ACHIEVEMENT_CRITERIA_TYPE_QUEST = 27
 local ACHIEVEMENT_BADGE_ICON = "Interface\\AchievementFrame\\UI-Achievement-TinyShield"
 local ACHIEVEMENT_CACHE_MIN_REBUILD_SECONDS = 2.0
@@ -322,13 +328,15 @@ local function BuildPreviewRows()
     return {
         {
             questID = nil,
-            title = "|cff6cff8f[N]|r " .. L["Preview: Normal Hunt"],
+            title = L["Preview: Normal Hunt"],
+            baseTitle = L["Preview: Normal Hunt"],
             reward = BuildPreviewReward({
                 "|T237274:14:14:0:0|t 1,250 " .. L["Experience"],
                 "|T4638297:14:14:0:0|t 50 Anguish",
                 "|T134063:14:14:0:0|t Preview Cache Reward",
             }),
             zone = "Dawnshore Coast",
+            difficultyKey = DIFFICULTY_NORMAL,
             difficulty = L["Normal"],
             achievementCount = 1,
             achievementNames = {
@@ -338,13 +346,15 @@ local function BuildPreviewRows()
         },
         {
             questID = nil,
-            title = "|cffffaa3d[H]|r " .. L["Preview: Hard Hunt"],
+            title = L["Preview: Hard Hunt"],
+            baseTitle = L["Preview: Hard Hunt"],
             reward = BuildPreviewReward({
                 "|T4638297:14:14:0:0|t 62 Anguish",
                 "|T4638530:14:14:0:0|t 1 Voidlight Marl",
                 "|T132625:14:14:0:0|t Preview Trinket",
             }),
             zone = "Twilight Ridge",
+            difficultyKey = DIFFICULTY_HARD,
             difficulty = L["Hard"],
             achievementCount = 2,
             achievementNames = {
@@ -355,13 +365,15 @@ local function BuildPreviewRows()
         },
         {
             questID = nil,
-            title = "|cffff5a5a[Ni]|r " .. L["Preview: Nightmare Hunt"],
+            title = L["Preview: Nightmare Hunt"],
+            baseTitle = L["Preview: Nightmare Hunt"],
             reward = BuildPreviewReward({
                 "|T4638297:14:14:0:0|t 78 Anguish",
                 "|T4638548:14:14:0:0|t 1 Champ. Crest",
                 "|T135274:14:14:0:0|t Preview Weapon",
             }),
             zone = "Umbral Wastes",
+            difficultyKey = DIFFICULTY_NIGHTMARE,
             difficulty = L["Nightmare"],
             achievementCount = 4,
             achievementNames = {
@@ -385,7 +397,7 @@ local THEME_PRESETS = {
         title = { 0.12, 0.10, 0.08, 1.00 },
         text = { 0.10, 0.09, 0.07, 1.00 },
         muted = { 0.28, 0.25, 0.21, 1.00 },
-        season = { 0.13, 0.34, 0.67, 1.00 },
+        season = { 1.00, 0.86, 0.00, 1.00 },
         fontKey = "frizqt",
     },
     brown = {
@@ -397,7 +409,7 @@ local THEME_PRESETS = {
         title = { 1.00, 0.82, 0.00, 1.00 },
         text = { 1.00, 1.00, 1.00, 1.00 },
         muted = { 0.74, 0.70, 0.60, 1.00 },
-        season = { 0.60, 0.80, 1.00, 1.00 },
+        season = { 1.00, 0.86, 0.00, 1.00 },
         fontKey = "frizqt",
     },
     dark = {
@@ -409,7 +421,7 @@ local THEME_PRESETS = {
         title = { 1.00, 0.82, 0.00, 1.00 },
         text = { 1.00, 1.00, 1.00, 1.00 },
         muted = { 0.65, 0.65, 0.70, 1.00 },
-        season = { 0.60, 0.80, 1.00, 1.00 },
+        season = { 1.00, 0.86, 0.00, 1.00 },
         fontKey = "frizqt",
     },
     deuteranopia = {
@@ -530,6 +542,17 @@ local function EnsureSettings()
         return
     end
 
+    local function NormalizeDifficultyColor(color, fallback)
+        local source = type(color) == "table" and color or fallback
+        local base = type(fallback) == "table" and fallback or { 1, 1, 1, 1 }
+        return {
+            math.max(0, math.min(1, tonumber(source and source[1]) or base[1] or 1)),
+            math.max(0, math.min(1, tonumber(source and source[2]) or base[2] or 1)),
+            math.max(0, math.min(1, tonumber(source and source[3]) or base[3] or 1)),
+            math.max(0, math.min(1, tonumber(source and source[4]) or base[4] or 1)),
+        }
+    end
+
     if settings.huntScannerEnabled == nil then
         settings.huntScannerEnabled = true
     end
@@ -558,6 +581,22 @@ local function EnsureSettings()
         settings.huntScannerShowRewardIcons = true
     end
 
+    if type(settings.huntScannerDifficultyColors) ~= "table" then
+        settings.huntScannerDifficultyColors = {}
+    end
+    settings.huntScannerDifficultyColors.normal = NormalizeDifficultyColor(
+        settings.huntScannerDifficultyColors.normal,
+        DEFAULT_DIFFICULTY_COLORS[DIFFICULTY_NORMAL]
+    )
+    settings.huntScannerDifficultyColors.hard = NormalizeDifficultyColor(
+        settings.huntScannerDifficultyColors.hard,
+        DEFAULT_DIFFICULTY_COLORS[DIFFICULTY_HARD]
+    )
+    settings.huntScannerDifficultyColors.nightmare = NormalizeDifficultyColor(
+        settings.huntScannerDifficultyColors.nightmare,
+        DEFAULT_DIFFICULTY_COLORS[DIFFICULTY_NIGHTMARE]
+    )
+
     if settings.huntScannerAchievementSignals == nil then
         settings.huntScannerAchievementSignals = true
     end
@@ -579,6 +618,11 @@ local function EnsureSettings()
     if settings.huntScannerAchievementTooltip == nil then
         settings.huntScannerAchievementTooltip = true
     end
+
+    settings.huntScannerAchievementBadgeColor = NormalizeDifficultyColor(
+        settings.huntScannerAchievementBadgeColor,
+        DEFAULT_ACHIEVEMENT_BADGE_COLOR
+    )
 
     settings.huntScannerAchievementIconSize = math.max(12, math.min(32, tonumber(settings.huntScannerAchievementIconSize) or 18))
 
@@ -775,6 +819,17 @@ local function GetTheme()
     local useCurrencyTheme = not settings or settings.huntScannerUseCurrencyTheme ~= false
     local key = useCurrencyTheme and (settings and settings.currencyTheme or "brown") or (settings and settings.huntScannerTheme or "brown")
     return ResolveThemeValue(key, settings)
+end
+
+local function GetThemeKey()
+    local settings = GetSettings()
+
+    if settings and settings.themeEditorPreviewInOptions == true and type(settings.themeEditorColors) == "table" then
+        return settings.themeEditorLoadKey or "brown"
+    end
+
+    local useCurrencyTheme = not settings or settings.huntScannerUseCurrencyTheme ~= false
+    return useCurrencyTheme and (settings and settings.currencyTheme or "brown") or (settings and settings.huntScannerTheme or "brown")
 end
 
 local function GetCoreState()
@@ -2587,8 +2642,8 @@ local function EnsurePanel()
     })
 
     local header = frame:CreateTexture(nil, "BORDER")
-    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, 0)
+    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, 0)
     header:SetHeight(28)
     frame.PreydatorHeader = header
 
@@ -2812,8 +2867,16 @@ end
 
 local function UpdatePanelTheme(frame)
     local theme = GetTheme()
+    local themeKey = GetThemeKey()
+    local settings = GetSettings()
     local _, _, fontSize = GetPanelConfig()
     local fontPath = GetThemeFontPath(theme)
+    local acceptButtonColor = (themeKey == "deuteranopia" or themeKey == "protanopia")
+        and { 1, 1, 1, 1 }
+        or { 1.00, 0.82, 0.00, 1.00 }
+    local achievementBadgeColor = (settings and settings.huntScannerAchievementBadgeColor)
+        or theme.season
+        or DEFAULT_ACHIEVEMENT_BADGE_COLOR
 
     frame:SetBackdropColor(theme.section[1], theme.section[2], theme.section[3], theme.section[4])
     frame:SetBackdropBorderColor(theme.border[1], theme.border[2], theme.border[3], theme.border[4])
@@ -2837,11 +2900,15 @@ local function UpdatePanelTheme(frame)
         row:SetBackdropBorderColor(theme.border[1], theme.border[2], theme.border[3], 0.65)
         SetTextColor(row.PreydatorName, theme.title)
         if row.PreydatorAchievement then
-            SetTextColor(row.PreydatorAchievement, theme.season)
+            SetTextColor(row.PreydatorAchievement, achievementBadgeColor)
         end
         if row.PreydatorAchievementIcon then
-            local season = theme.season or { 1, 1, 1, 1 }
-            row.PreydatorAchievementIcon:SetVertexColor(season[1] or 1, season[2] or 1, season[3] or 1, 1)
+            row.PreydatorAchievementIcon:SetVertexColor(
+                achievementBadgeColor[1] or 1,
+                achievementBadgeColor[2] or 1,
+                achievementBadgeColor[3] or 1,
+                achievementBadgeColor[4] or 1
+            )
         end
         if row.PreydatorZone then
             SetTextColor(row.PreydatorZone, theme.muted)
@@ -2866,7 +2933,7 @@ local function UpdatePanelTheme(frame)
             if row.PreydatorAccept.GetFontString then
                 local fs = row.PreydatorAccept:GetFontString()
                 if fs then
-                    SetTextColor(fs, theme.title)
+                    SetTextColor(fs, acceptButtonColor)
                 end
             end
         end
@@ -2909,16 +2976,37 @@ end
 local function GetDifficultyBadge(difficulty)
     local canonicalDifficulty = NormalizeDifficultyKey(difficulty)
 
+    local function GetConfiguredDifficultyColor(key)
+        local settings = GetSettings()
+        local colors = settings and settings.huntScannerDifficultyColors
+        local fallback = DEFAULT_DIFFICULTY_COLORS[key] or { 0.60, 0.64, 0.68, 1.00 }
+        local color = colors and colors[key]
+        return {
+            math.max(0, math.min(1, tonumber(color and color[1]) or fallback[1])),
+            math.max(0, math.min(1, tonumber(color and color[2]) or fallback[2])),
+            math.max(0, math.min(1, tonumber(color and color[3]) or fallback[3])),
+            math.max(0, math.min(1, tonumber(color and color[4]) or fallback[4] or 1)),
+        }
+    end
+
+    local function BuildColorCode(color, label)
+        local a = math.floor((math.max(0, math.min(1, color[4] or 1)) * 255) + 0.5)
+        local r = math.floor((math.max(0, math.min(1, color[1] or 1)) * 255) + 0.5)
+        local g = math.floor((math.max(0, math.min(1, color[2] or 1)) * 255) + 0.5)
+        local b = math.floor((math.max(0, math.min(1, color[3] or 1)) * 255) + 0.5)
+        return string.format("|c%02x%02x%02x%02x%s|r", a, r, g, b, label)
+    end
+
     if canonicalDifficulty == DIFFICULTY_NIGHTMARE then
-        return "|cffff5a5a[Ni]|r"
+        return BuildColorCode(GetConfiguredDifficultyColor(DIFFICULTY_NIGHTMARE), "[Ni]")
     end
     if canonicalDifficulty == DIFFICULTY_HARD then
-        return "|cffffaa3d[H]|r"
+        return BuildColorCode(GetConfiguredDifficultyColor(DIFFICULTY_HARD), "[H]")
     end
     if canonicalDifficulty == DIFFICULTY_NORMAL then
-        return "|cff6cff8f[N]|r"
+        return BuildColorCode(GetConfiguredDifficultyColor(DIFFICULTY_NORMAL), "[N]")
     end
-    return "|cff9aa3ad[?]|r"
+    return BuildColorCode({ 0.60, 0.64, 0.68, 1.00 }, "[?]")
 end
 
 local function BuildQuestRows(mapHunts)
@@ -3200,7 +3288,11 @@ local function RenderPanel(questRows)
         if data then
             row:Show()
             row.PreydatorQuestID = SafeToNumber(data.questID)
-            row.PreydatorName:SetText(data.title or "-")
+            local displayTitle = data.title or "-"
+            if data.difficultyKey and data.baseTitle then
+                displayTitle = GetDifficultyBadge(data.difficultyKey) .. " " .. tostring(data.baseTitle)
+            end
+            row.PreydatorName:SetText(displayTitle)
             row.PreydatorAchievementCount = SafeToNumber(data.achievementCount) or 0
             row.PreydatorAchievementNames = data.achievementNames
             if row.PreydatorAchievement then

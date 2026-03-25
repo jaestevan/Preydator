@@ -1083,7 +1083,7 @@ local function BuildHuntPage(owner, parent)
         self:SetText((db.huntScannerPreviewInOptions == true) and L["Hide Preview Pane"] or L["Show Preview Pane"])
     end
 
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -104, L["Hunt Panel Width"], 280, 620, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -80, L["Hunt Panel Width"], 280, 620, 1, function()
         return db.huntScannerWidth or 336
     end, function(value)
         db.huntScannerWidth = math.floor(value + 0.5)
@@ -1091,7 +1091,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -156, L["Hunt Panel Height"], 320, 900, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -132, L["Hunt Panel Height"], 320, 900, 1, function()
         return db.huntScannerHeight or 460
     end, function(value)
         db.huntScannerHeight = math.floor(value + 0.5)
@@ -1100,7 +1100,7 @@ local function BuildHuntPage(owner, parent)
         return tostring(math.floor(value + 0.5))
     end))
 
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -208, L["Hunt Panel Scale"], 0.70, 1.60, 0.05, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -184, L["Hunt Panel Scale"], 0.70, 1.60, 0.05, function()
         return db.huntScannerScale or 1.00
     end, function(value)
         db.huntScannerScale = value
@@ -1108,7 +1108,7 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return string.format("%.2f", value)
     end))
-    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -260, L["Hunt Panel Font Size"], 10, 24, 1, function()
+    TrackHuntControl(CreateSlider(content, COLUMN_RIGHT_X, -236, L["Hunt Panel Font Size"], 10, 24, 1, function()
         return db.huntScannerFontSize or 12
     end, function(value)
         db.huntScannerFontSize = math.floor(value + 0.5)
@@ -1116,6 +1116,30 @@ local function BuildHuntPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
+    TrackHuntControl(CreateColorButton(content, COLUMN_RIGHT_X, -288, L["Normal Difficulty"], function()
+        local colors = db.huntScannerDifficultyColors or {}
+        return colors.normal or { 0.42, 1.00, 0.56, 1.00 }
+    end, function(color)
+        db.huntScannerDifficultyColors = db.huntScannerDifficultyColors or {}
+        db.huntScannerDifficultyColors.normal = { color[1], color[2], color[3], color[4] or 1 }
+        RefreshHuntTrackerPanel()
+    end, false))
+    TrackHuntControl(CreateColorButton(content, COLUMN_RIGHT_X, -320, L["Hard Difficulty"], function()
+        local colors = db.huntScannerDifficultyColors or {}
+        return colors.hard or { 1.00, 0.67, 0.24, 1.00 }
+    end, function(color)
+        db.huntScannerDifficultyColors = db.huntScannerDifficultyColors or {}
+        db.huntScannerDifficultyColors.hard = { color[1], color[2], color[3], color[4] or 1 }
+        RefreshHuntTrackerPanel()
+    end, false))
+    TrackHuntControl(CreateColorButton(content, COLUMN_RIGHT_X, -352, L["Nightmare Difficulty"], function()
+        local colors = db.huntScannerDifficultyColors or {}
+        return colors.nightmare or { 1.00, 0.35, 0.35, 1.00 }
+    end, function(color)
+        db.huntScannerDifficultyColors = db.huntScannerDifficultyColors or {}
+        db.huntScannerDifficultyColors.nightmare = { color[1], color[2], color[3], color[4] or 1 }
+        RefreshHuntTrackerPanel()
+    end, false))
     -- Currency section
     CreateSectionTitle(content, COLUMN_LEFT_X, -392, L["Currency Panel"])
     local currencyToggleButton = CreateActionButton(content, COLUMN_RIGHT_X, -392, 180, L["Open Currency"], function()
@@ -2988,6 +3012,18 @@ end
 local function BuildAchievementsPage(owner, parent)
     local db = api.GetSettings()
 
+    local function ConfigureCheckboxLabel(control, width)
+        if not (control and control.Text and control.Text.SetWidth) then
+            return
+        end
+
+        control.Text:SetWidth(width)
+        control.Text:SetJustifyH("LEFT")
+        if control.Text.SetWordWrap then
+            control.Text:SetWordWrap(true)
+        end
+    end
+
     local function ToggleAchievementPreview()
         local huntScanner = Preydator:GetModule("HuntScanner")
         local enabled = not (db.huntScannerPreviewInOptions == true)
@@ -3002,13 +3038,13 @@ local function BuildAchievementsPage(owner, parent)
 
     CreateSectionTitle(parent, COLUMN_LEFT_X, -10, L["Achievements"])
     local note = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    note:SetPoint("TOPLEFT", parent, "TOPLEFT", COLUMN_LEFT_X, -42)
-    note:SetWidth(560)
+    note:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -42)
+    note:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -16, -42)
     note:SetJustifyH("LEFT")
     note:SetWordWrap(true)
     note:SetText(L["Hunt Tracker drives achievement indicators and tooltips in the hunt list. Use preview to test icon style, icon size, and tooltip names with sample achievement data."])
 
-    local previewButton = RegisterRefresher(owner, CreateActionButton(parent, COLUMN_RIGHT_X, -86, 180, L["Show Preview Pane"], function()
+    local previewButton = RegisterRefresher(owner, CreateActionButton(parent, COLUMN_LEFT_X + 24, -304, 180, L["Show Preview Pane"], function()
         ToggleAchievementPreview()
     end))
     previewButton.PreydatorRefresh = function(self)
@@ -3021,6 +3057,7 @@ local function BuildAchievementsPage(owner, parent)
         db.huntScannerAchievementSignals = value and true or false
         RefreshHuntTrackerPanel()
     end))
+    ConfigureCheckboxLabel(signalCheck, 320)
 
     local tooltipCheck = RegisterRefresher(owner, CreateCheckbox(parent, COLUMN_LEFT_X, -142, L["Show Achievement Names On Mouseover"], function()
         return db.huntScannerAchievementTooltip ~= false
@@ -3028,15 +3065,23 @@ local function BuildAchievementsPage(owner, parent)
         db.huntScannerAchievementTooltip = value and true or false
         RefreshHuntTrackerPanel()
     end))
+    ConfigureCheckboxLabel(tooltipCheck, 320)
 
-    local styleDropdown = RegisterRefresher(owner, CreateDropdown(parent, COLUMN_LEFT_X, -194, L["Achievement Signal Style"], 170, ACHIEVEMENT_SIGNAL_STYLE_OPTIONS, function()
+    local styleDropdown = RegisterRefresher(owner, CreateDropdown(parent, COLUMN_LEFT_X, -184, L["Achievement Signal Style"], 170, ACHIEVEMENT_SIGNAL_STYLE_OPTIONS, function()
         return db.huntScannerAchievementSignalStyle or "icon_count"
     end, function(value)
         db.huntScannerAchievementSignalStyle = value
         RefreshHuntTrackerPanel()
     end))
 
-    local iconSizeSlider = RegisterRefresher(owner, CreateSlider(parent, COLUMN_LEFT_X, -250, L["Achievement Icon Size"], 12, 32, 1, function()
+    local badgeColorButton = RegisterRefresher(owner, CreateColorButton(parent, COLUMN_LEFT_X, -244, L["Achievement Badge Color"], function()
+        return db.huntScannerAchievementBadgeColor or { 1.00, 0.86, 0.00, 1.00 }
+    end, function(color)
+        db.huntScannerAchievementBadgeColor = { color[1], color[2], color[3], color[4] or 1 }
+        RefreshHuntTrackerPanel()
+    end, true))
+
+    local iconSizeSlider = RegisterRefresher(owner, CreateSlider(parent, COLUMN_LEFT_X, -286, L["Achievement Icon Size"], 12, 32, 1, function()
         return tonumber(db.huntScannerAchievementIconSize) or 18
     end, function(value)
         db.huntScannerAchievementIconSize = math.floor(value + 0.5)
@@ -3044,6 +3089,8 @@ local function BuildAchievementsPage(owner, parent)
     end, function(value)
         return tostring(math.floor(value + 0.5))
     end))
+
+    previewButton:SetPoint("TOPLEFT", parent, "TOPLEFT", COLUMN_LEFT_X + 24, -340)
 
     RegisterRefresher(owner, {
         PreydatorRefresh = function()
@@ -3053,6 +3100,9 @@ local function BuildAchievementsPage(owner, parent)
             end
             if styleDropdown and styleDropdown.PreydatorSetEnabled then
                 styleDropdown:PreydatorSetEnabled(enabled)
+            end
+            if badgeColorButton and badgeColorButton.PreydatorSetEnabled then
+                badgeColorButton:PreydatorSetEnabled(enabled)
             end
             if iconSizeSlider and iconSizeSlider.PreydatorSetEnabled then
                 iconSizeSlider:PreydatorSetEnabled(enabled and (db.huntScannerAchievementSignalStyle ~= "count_only"))
