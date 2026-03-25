@@ -1,6 +1,13 @@
 # Changelog
 
-## 2.1.2 - 2026-03-25
+## 2.1.3 - 2026-03-25
+
+### Fixed
+- HuntScanner reward inspection is now strictly gated to active Hunt Table mission context only (mission frame shown and hunt interaction active), preventing open-world quest reward probing.
+- Added explicit `koKR` localization assignments for all currently code-referenced localization keys to eliminate missing-key fallback to English.
+
+### Release
+- Updated addon metadata version to `2.1.3` in TOC and release tooling defaults.
 
 ### Changed
 - Unified achievement badge color across all themes to use Protanopia's gold/orange tone for consistent visual distinction and better colorblind accessibility.

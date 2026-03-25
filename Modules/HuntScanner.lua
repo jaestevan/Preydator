@@ -7,42 +7,7 @@ local L = _G.PreydatorL or setmetatable({}, { __index = function(_, k) return k 
 local HuntScannerModule = {}
 Preydator:RegisterModule("HuntScanner", HuntScannerModule)
 
-local C_GossipInfo = _G.C_GossipInfo
-local C_PlayerInteractionManager = _G.C_PlayerInteractionManager
-local C_QuestLog = _G.C_QuestLog
-local CreateFrame = _G.CreateFrame
-local C_Timer = _G.C_Timer
-local GetTime = _G.GetTime
-local UnitGUID = _G.UnitGUID
-local UnitName = _G.UnitName
-local UnitLevel = _G.UnitLevel
-local GetRealmName = _G.GetRealmName
-local IsInInstance = _G.IsInInstance
-local UIParent = _G.UIParent
-local GetQuestID = _G.GetQuestID
-local GetTitleText = _G.GetTitleText
-local GetObjectiveText = _G.GetObjectiveText
-local GetNumQuestChoices = _G.GetNumQuestChoices
 local HookSecureFunc = _G.hooksecurefunc
-local HideUIPanel = _G.HideUIPanel
-local GameTooltip = _G.GameTooltip
-local GetAchievementInfo = _G.GetAchievementInfo
-local GetAchievementNumCriteria = _G.GetAchievementNumCriteria
-local GetAchievementCriteriaInfo = _G.GetAchievementCriteriaInfo
-local geterrorhandler = _G.geterrorhandler
-local strsplit = _G.strsplit
-local tonumber = _G.tonumber
-local tostring = _G.tostring
-local type = _G.type
-local table = _G.table
-local wipe = _G.wipe
-local ipairs = _G.ipairs
-local pairs = _G.pairs
-local pcall = _G.pcall
-local print = _G.print
-local string = _G.string
-local math = _G.math
-local date = _G.date
 
 local HUNT_TABLE_NPC_IDS = {
     [245824] = true,
@@ -1474,6 +1439,22 @@ local function IsHuntTableContext(options)
     return false, npcID
 end
 
+local function CanInspectHuntRewardsNow()
+    if IsOptionsPreviewVisible() then
+        return false
+    end
+
+    if not IsMissionFrameVisible() then
+        return false
+    end
+
+    if huntInteractionActive ~= true then
+        return false
+    end
+
+    return true
+end
+
 local function SnapshotHasUsefulData(snapshot)
     if type(snapshot) ~= "table" then
         return false
@@ -1595,6 +1576,10 @@ local function BuildRewardSummary(questID)
 
     local function BuildQuestCurrencyRewardList(id)
         local rewards = {}
+
+        if not CanInspectHuntRewardsNow() then
+            return rewards
+        end
 
         if C_QuestLog and type(C_QuestLog.GetQuestRewardCurrencies) == "function" then
             local okRewardCurrencies, rewardCurrencies = pcall(C_QuestLog.GetQuestRewardCurrencies, id)
@@ -2206,6 +2191,10 @@ local function SnapshotDialogRewards()
 end
 
 local function WarmRewardCacheFromPins()
+    if not CanInspectHuntRewardsNow() then
+        return
+    end
+
     if rewardWarmCancel then
         return
     end

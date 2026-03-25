@@ -1712,28 +1712,23 @@ end
 
 local function ShowCurrencyWhatsNewIfNeeded()
     local settings = GetSettings()
-    if not settings then
-        return
+    if settings then
+        -- Splash disabled by request: keep version marked as seen and never show popup.
+        settings.currencyWhatsNewSeenVersion = CURRENCY_WHATS_NEW_VERSION
     end
-
-    if settings.currencyWhatsNewSeenVersion == CURRENCY_WHATS_NEW_VERSION then
-        return
+    if currencyWhatsNewFrame and currencyWhatsNewFrame.Hide then
+        currencyWhatsNewFrame:Hide()
     end
-
-    EnsureCurrencyWhatsNewFrame():Show()
 end
 
 function CurrencyTrackerModule:ShowCurrencyWhatsNew(force)
     local settings = GetSettings()
-    if not settings then
-        return
+    if settings then
+        settings.currencyWhatsNewSeenVersion = CURRENCY_WHATS_NEW_VERSION
     end
-
-    if force == true then
-        settings.currencyWhatsNewSeenVersion = nil
+    if currencyWhatsNewFrame and currencyWhatsNewFrame.Hide then
+        currencyWhatsNewFrame:Hide()
     end
-
-    ShowCurrencyWhatsNewIfNeeded()
 end
 
 local function ToggleCurrencyWindow()
