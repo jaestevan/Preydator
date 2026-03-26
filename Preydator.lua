@@ -400,7 +400,6 @@ local UI = {
     optionsScrollFrame = false,
     optionsContentFrame = false,
     candidateWidgetSetIDs = {},
-    targetedWidgetGlobalFrameCache = {},
     colorPickerSessionCounter = 0,
 }
 
@@ -416,6 +415,8 @@ local ApplyDefaultPreyIconVisibility
 local TryOpenPreyQuestOnMap
 local BarRuntimeApplyHandler
 local BarRuntimeUpdateHandler
+local OnBlizzardWidgetsLoaded
+local OnPlayerRegenEnabled
 
 local function RunModuleHook(hookName, ...)
     for _, module in pairs(Preydator.modules) do
@@ -442,6 +443,7 @@ local state = {
     elapsedSinceUpdate = 0,
     lastWidgetSeenAt = 0,
     lastPreyWidgetID = nil,
+    lastPreyWidgetSetID = nil,
     lastStateDebugSnapshot = nil,
     lastDisplayPct = 0,
     lastDisplayReason = "init",
@@ -463,6 +465,7 @@ local state = {
     zoneCacheDirty = true,
     pollingActive = false,
     nextPollingEligibilityCheckAt = 0,
+    pendingWidgetSuppressionAfterCombat = false,
 }
 
 local UPDATE_INTERVAL_SECONDS = 0.5
@@ -1214,6 +1217,7 @@ local function RefreshInPreyZoneStatus(questID, force)
     end
 
     local inPreyZone = nil
+    local usedOnMapFallback = false
     if state.preyZoneMapID then
         if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
             if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
@@ -1251,12 +1255,19 @@ local function RefreshInPreyZoneStatus(questID, force)
             end
         end
     else
+        usedOnMapFallback = true
         inPreyZone = IsPreyQuestOnCurrentMap(questID)
+        if inPreyZone == false then
+            -- Some prey quests do not expose a stable task-quest zone map ID and
+            -- may also report isOnMap=false while the player is actually in-zone.
+            -- Treat this as unknown so we do not incorrectly hide the bar.
+            inPreyZone = nil
+        end
         -- For quests with no task-quest map ID, treat this as our zone snapshot.
         state.zoneCacheDirty = false
     end
 
-    if inPreyZone == nil then
+    if inPreyZone == nil and not usedOnMapFallback then
         inPreyZone = IsPreyQuestOnCurrentMap(questID)
         state.zoneCacheDirty = false
     end
@@ -2317,6 +2328,7 @@ local function ClearPreyStateAndDisplay()
     state.killStageUntil = 0
     state.lastWidgetSeenAt = 0
     state.lastPreyWidgetID = nil
+    state.lastPreyWidgetSetID = nil
     state.stageSoundPlayed = {}
     state.stageSoundAttempted = {}
     state.lastStateDebugSnapshot = nil
@@ -2335,55 +2347,10 @@ local function ClearPreyStateAndDisplay()
 end
 
 local function IsRelevantWidgetUpdateEvent(arg1, arg2)
-    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
-        or PREY_WIDGET_TYPE
-
-    local widgetID = nil
-    local widgetType = nil
-
-    local function readPayload(payload)
-        if type(payload) ~= "table" then
-            return
-        end
-
-        if widgetID == nil then
-            widgetID = tonumber(payload.widgetID or payload.uiWidgetID or payload.id)
-        end
-
-        if widgetType == nil then
-            widgetType = tonumber(payload.widgetType or payload.visualizationType)
-        end
-    end
-
-    readPayload(arg1)
-    readPayload(arg2)
-
-    if widgetID == nil and type(arg1) == "number" then
-        widgetID = tonumber(arg1)
-    end
-
-    if widgetType == nil and type(arg2) == "number" then
-        widgetType = tonumber(arg2)
-    end
-
-    if widgetType == preyWidgetType then
-        if widgetID then
-            state.lastPreyWidgetID = widgetID
-        end
-        return true
-    end
-
-    local trackedWidgetID = tonumber(state and state.lastPreyWidgetID) or nil
-    if widgetID and trackedWidgetID and widgetID == trackedWidgetID then
-        return true
-    end
-
-    -- Fail open when event payload format is unknown for this client build.
-    if widgetID == nil and widgetType == nil then
-        return true
-    end
-
-    return false
+    -- Taint-safe fail-open: do not touch UPDATE_UI_WIDGET payload fields.
+    -- Some client paths provide secret-number payload values; reading/coercing
+    -- them in addon code can taint subsequent Blizzard tooltip/layout flows.
+    return true
 end
 
 local function DebugLogPreyState(origin, questID, hasWidgetData, progressState, progressPercent, inPreyZone)
@@ -2418,6 +2385,8 @@ local function GetCandidateWidgetSetIDs()
         UI.candidateWidgetSetIDs[index] = nil
     end
 
+    local seenSetIDs = {}
+
     local function appendWidgetSetID(getter)
         if not getter then
             return
@@ -2426,24 +2395,18 @@ local function GetCandidateWidgetSetIDs()
         if not okSetID then
             return
         end
-        local okNumericSetID, numericSetID = pcall(function()
-            return tonumber(rawSetID)
+        local okValidSetID, isValidSetID = pcall(function()
+            return type(rawSetID) == "number" and rawSetID > 0
         end)
-        if okNumericSetID and numericSetID and numericSetID > 0 then
-            UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = numericSetID
+        if okValidSetID and isValidSetID and not seenSetIDs[rawSetID] then
+            seenSetIDs[rawSetID] = true
+            UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = rawSetID
         end
     end
 
     if C_UIWidgetManager then
-        -- The prey hunt widget lives in the PowerBar set. Query it first and only
-        -- scan the other set IDs as a fallback if PowerBar yields nothing, so we
-        -- minimise the number of protected secret-number values we ever touch.
+        -- Keep widget-set access scoped to PowerBar (the known prey host).
         appendWidgetSetID(C_UIWidgetManager.GetPowerBarWidgetSetID)
-        if #UI.candidateWidgetSetIDs == 0 then
-            appendWidgetSetID(C_UIWidgetManager.GetTopCenterWidgetSetID)
-            appendWidgetSetID(C_UIWidgetManager.GetObjectiveTrackerWidgetSetID)
-            appendWidgetSetID(C_UIWidgetManager.GetBelowMinimapWidgetSetID)
-        end
     end
 
     return UI.candidateWidgetSetIDs
@@ -2480,10 +2443,177 @@ local function SetRegionShown(region, shouldShow)
     return false
 end
 
+local AttachStageFourMapClick
+
 local WIDGET_SUPPRESSION_WAS_SHOWN = setmetatable({}, { __mode = "k" })
+local WIDGET_SUPPRESSION_WAS_ALPHA = setmetatable({}, { __mode = "k" })
 local WIDGET_SUPPRESSION_HOOKED = setmetatable({}, { __mode = "k" })
 local STAGE_FOUR_CLICK_HOOKED = setmetatable({}, { __mode = "k" })
+local PREY_WIDGET_FRAMES = setmetatable({}, { __mode = "k" })
 local preyHuntMixinHooked = false
+local preyHuntIconFrame = nil
+local suppressionRetryPending = false
+local suppressionRetryCount = 0
+
+local function CancelFrameScriptedEffect(frameRef)
+    local effectController = frameRef and frameRef.effectController or nil
+    if effectController and type(effectController.CancelEffect) == "function" then
+        pcall(effectController.CancelEffect, effectController)
+    end
+end
+
+-- Safe: identifies prey hunt frames by checking mixin-specific function presence.
+-- Does NOT read any secret-number fields (widgetID, widgetType, etc.).
+local function IsPreyHuntProgressFrame(frameRef)
+    if not frameRef then
+        return false
+    end
+    -- ResetAnimState and AnimIn are defined only in UIWidgetTemplatePreyHuntProgressMixin.
+    return type(frameRef.ResetAnimState) == "function"
+        and type(frameRef.AnimIn) == "function"
+end
+
+-- Enumerates children of the PowerBar container without reading any secret values.
+-- Used to capture frames that were created before the mixin hook was installed.
+local function CaptureLivePreyHuntFrames()
+    local container = _G.UIWidgetPowerBarContainerFrame
+    if not container or not container.GetChildren then
+        return
+    end
+
+    local okChildren, children = pcall(function()
+        return { container:GetChildren() }
+    end)
+    if not okChildren or type(children) ~= "table" then
+        return
+    end
+
+    for _, child in ipairs(children) do
+        if IsPreyHuntProgressFrame(child) then
+            PREY_WIDGET_FRAMES[child] = true
+            preyHuntIconFrame = child
+        end
+    end
+end
+
+local function TrackKnownPreyWidgetFrames(widgetID)
+    local numericWidgetID = (type(widgetID) == "number" and widgetID > 0) and widgetID or nil
+    if not numericWidgetID then
+        CaptureLivePreyHuntFrames()
+        return
+    end
+
+    -- Use the safe container API to resolve the frame for this specific widget ID.
+    -- We do NOT walk container children and read .widgetID fields, as those are
+    -- secret numbers that taint the Lua execution context.
+    local containerNames = {
+        "UIWidgetPowerBarContainerFrame",
+        "UIWidgetTopCenterContainerFrame",
+        "UIWidgetBelowMinimapContainerFrame",
+        "UIWidgetObjectiveTrackerContainerFrame",
+    }
+    for _, containerName in ipairs(containerNames) do
+        local container = _G[containerName]
+        if container and container.GetWidgetFrame then
+            local okFrame, frameRef = pcall(container.GetWidgetFrame, container, numericWidgetID)
+            if okFrame and frameRef then
+                PREY_WIDGET_FRAMES[frameRef] = true
+            end
+        end
+    end
+
+    -- Fallback: if we still have no tracked frames, scan container children by
+    -- mixin method presence (never reads secret widgetID/widgetType fields).
+    local hasAny = false
+    for _ in pairs(PREY_WIDGET_FRAMES) do
+        hasAny = true
+        break
+    end
+    if not hasAny then
+        CaptureLivePreyHuntFrames()
+    end
+end
+
+local function IsLikelyAnimatedVisualRegion(region)
+    if not region then
+        return false
+    end
+
+    local objectType = region.GetObjectType and region:GetObjectType() or nil
+    if objectType ~= "Texture" and objectType ~= "FontString" then
+        return false
+    end
+
+    local name = region.GetName and region:GetName() or nil
+    if type(name) ~= "string" then
+        return false
+    end
+
+    local lowered = string.lower(name)
+    return string.find(lowered, "icon", 1, true) ~= nil
+        or string.find(lowered, "glow", 1, true) ~= nil
+        or string.find(lowered, "pulse", 1, true) ~= nil
+end
+
+local function StopFrameAnimations(frameRef, depth, visited)
+    if not frameRef or (depth or 0) > 3 then
+        return
+    end
+
+    visited = visited or {}
+    if visited[frameRef] then
+        return
+    end
+    visited[frameRef] = true
+    CancelFrameScriptedEffect(frameRef)
+
+    if frameRef.GetAnimationGroups then
+        local okGroups, groups = pcall(function()
+            return { frameRef:GetAnimationGroups() }
+        end)
+        if okGroups and type(groups) == "table" then
+            for _, group in ipairs(groups) do
+                if group and group.Stop then
+                    pcall(group.Stop, group)
+                end
+            end
+        end
+    end
+
+    local commonAnimFields = {
+        "AnimIn", "AnimOut", "GlowAnim", "PulseAnim", "Loop", "LoopingGlow", "Shine",
+    }
+    for _, fieldName in ipairs(commonAnimFields) do
+        local candidate = frameRef[fieldName]
+        if candidate and type(candidate) ~= "function" and candidate.Stop then
+            pcall(candidate.Stop, candidate)
+        end
+    end
+
+    if frameRef.GetRegions then
+        local okRegions, regions = pcall(function()
+            return { frameRef:GetRegions() }
+        end)
+        if okRegions and type(regions) == "table" then
+            for _, region in ipairs(regions) do
+                if IsLikelyAnimatedVisualRegion(region) then
+                    SetRegionShown(region, false)
+                end
+            end
+        end
+    end
+
+    if frameRef.GetChildren then
+        local okChildren, children = pcall(function()
+            return { frameRef:GetChildren() }
+        end)
+        if okChildren and type(children) == "table" then
+            for _, child in ipairs(children) do
+                StopFrameAnimations(child, (depth or 0) + 1, visited)
+            end
+        end
+    end
+end
 
 local function ApplyWidgetFrameSuppression(frameRef, suppress)
     if not frameRef then
@@ -2493,13 +2623,30 @@ local function ApplyWidgetFrameSuppression(frameRef, suppress)
     local wasShown = WIDGET_SUPPRESSION_WAS_SHOWN[frameRef]
 
     if suppress then
+        StopFrameAnimations(frameRef, 0)
         if wasShown == nil and frameRef.IsShown then
             WIDGET_SUPPRESSION_WAS_SHOWN[frameRef] = frameRef:IsShown() and true or false
+        end
+        if WIDGET_SUPPRESSION_WAS_ALPHA[frameRef] == nil and frameRef.GetAlpha then
+            local okAlpha, alpha = pcall(frameRef.GetAlpha, frameRef)
+            if okAlpha and type(alpha) == "number" then
+                WIDGET_SUPPRESSION_WAS_ALPHA[frameRef] = alpha
+            end
+        end
+        if frameRef.SetAlpha then
+            pcall(frameRef.SetAlpha, frameRef, 0)
         end
         if frameRef.Hide then
             pcall(frameRef.Hide, frameRef)
         end
     else
+        local storedAlpha = WIDGET_SUPPRESSION_WAS_ALPHA[frameRef]
+        if storedAlpha ~= nil and frameRef.SetAlpha then
+            pcall(frameRef.SetAlpha, frameRef, storedAlpha)
+            WIDGET_SUPPRESSION_WAS_ALPHA[frameRef] = nil
+        elseif frameRef.SetAlpha then
+            pcall(frameRef.SetAlpha, frameRef, 1)
+        end
         if wasShown then
             WIDGET_SUPPRESSION_WAS_SHOWN[frameRef] = nil
             if frameRef.Show then
@@ -2514,6 +2661,75 @@ local function ApplyWidgetFrameSuppression(frameRef, suppress)
         pcall(frameRef.EnableMouse, frameRef, not suppress)
     end
 end
+
+local function ScheduleSuppressionRetry()
+    if suppressionRetryPending then
+        return
+    end
+    if not (type(C_Timer) == "table" and type(C_Timer.After) == "function") then
+        return
+    end
+    if suppressionRetryCount >= 6 then
+        suppressionRetryCount = 0
+        return
+    end
+
+    suppressionRetryPending = true
+    suppressionRetryCount = suppressionRetryCount + 1
+    C_Timer.After(0.20, function()
+        suppressionRetryPending = false
+        if not (settings and settings.disableDefaultPreyIcon == true) then
+            suppressionRetryCount = 0
+            return
+        end
+        if type(_G.InCombatLockdown) == "function" and _G.InCombatLockdown() then
+            state.pendingWidgetSuppressionAfterCombat = true
+            return
+        end
+        ApplyDefaultPreyIconVisibility()
+    end)
+end
+
+local function GetWidgetSuppressionDebugSnapshot()
+    local trackedFrames = 0
+    local shownFrames = 0
+    local hiddenFrames = 0
+    local effectControllers = 0
+
+    for frameRef in pairs(PREY_WIDGET_FRAMES) do
+        trackedFrames = trackedFrames + 1
+        if frameRef and frameRef.IsShown and frameRef:IsShown() then
+            shownFrames = shownFrames + 1
+        else
+            hiddenFrames = hiddenFrames + 1
+        end
+        if frameRef and frameRef.effectController then
+            effectControllers = effectControllers + 1
+        end
+    end
+
+    local preyIconTracked = preyHuntIconFrame and PREY_WIDGET_FRAMES[preyHuntIconFrame] == true or false
+    local preyIconShown = nil
+    if preyHuntIconFrame and preyHuntIconFrame.IsShown then
+        preyIconShown = preyHuntIconFrame:IsShown() and true or false
+    end
+
+    return {
+        trackedFrames = trackedFrames,
+        shownFrames = shownFrames,
+        hiddenFrames = hiddenFrames,
+        effectControllers = effectControllers,
+        preyIconTracked = preyIconTracked,
+        preyIconShown = preyIconShown,
+        suppressionRetryPending = suppressionRetryPending,
+        suppressionRetryCount = suppressionRetryCount,
+        pendingAfterCombat = state and state.pendingWidgetSuppressionAfterCombat == true,
+        lastPreyWidgetID = state and state.lastPreyWidgetID or nil,
+        lastPreyWidgetSetID = state and state.lastPreyWidgetSetID or nil,
+    }
+end
+
+Preydator.GetWidgetSuppressionDebug = GetWidgetSuppressionDebugSnapshot
 
 local function ShouldSuppressEncounterNow()
     return settings
@@ -2530,6 +2746,10 @@ local function EnsureWidgetSuppressionHook(frameRef)
     frameRef:HookScript("OnShow", function(self)
         local ok = pcall(function()
             if ShouldSuppressEncounterNow() then
+                if type(_G.InCombatLockdown) == "function" and _G.InCombatLockdown() then
+                    state.pendingWidgetSuppressionAfterCombat = true
+                    return
+                end
                 ApplyWidgetFrameSuppression(self, true)
             end
         end)
@@ -2553,29 +2773,31 @@ local function EnsurePreyHuntMixinSuppressionHook()
     -- hooksecurefunc fires AFTER Blizzard's Setup() runs AnimIn/ResetAnimState/SetAlpha(1)/Show(),
     -- so re-hiding here lands at the right point in the sequence.
     local ok = pcall(hooksecurefunc, mixin, "Setup", function(self)
+        preyHuntIconFrame = self
+        PREY_WIDGET_FRAMES[self] = true
+        AttachStageFourMapClick(self)
+        EnsureWidgetSuppressionHook(self)
+
         if ShouldSuppressEncounterNow() then
-            if type(self.Hide) == "function" then
-                pcall(self.Hide, self)
-            elseif type(self.SetAlpha) == "function" then
-                pcall(self.SetAlpha, self, 0)
+            if type(_G.InCombatLockdown) == "function" and _G.InCombatLockdown() then
+                state.pendingWidgetSuppressionAfterCombat = true
+                return
             end
+            ApplyWidgetFrameSuppression(self, true)
+        else
+            ApplyWidgetFrameSuppression(self, false)
         end
     end)
 
     if ok then
         preyHuntMixinHooked = true
+        -- Capture any prey hunt frame that was already set up before our hook installed.
+        CaptureLivePreyHuntFrames()
     end
 end
 
 ShouldSuppressDefaultPreyEncounter = function()
-    local hasActiveQuest = IsValidQuestID(state and state.activeQuestID)
-    if not hasActiveQuest then
-        return false
-    end
-
-    -- Suppress default encounter visuals whenever an active prey quest is tracked.
-    -- This avoids zone-specific regressions when Blizzard changes map/widget behavior.
-    return true
+    return settings and settings.disableDefaultPreyIcon == true
 end
 
 local function TryGetPreyQuestWaypoint(questID)
@@ -2685,35 +2907,7 @@ TryOpenPreyQuestOnMap = function()
     return true
 end
 
-local function TryGetWidgetFrameByID(container, widgetID)
-    if type(container) ~= "table" and type(container) ~= "userdata" then
-        return nil
-    end
-
-    if container.GetWidgetFrame then
-        local ok, frameRef = pcall(container.GetWidgetFrame, container, widgetID)
-        if ok and frameRef then
-            return frameRef
-        end
-    end
-
-    local possibleFrameTables = {
-        container.widgetFrames,
-        container.WidgetFrames,
-        container.activeWidgets,
-        container.ActiveWidgets,
-    }
-
-    for _, frameTable in ipairs(possibleFrameTables) do
-        if type(frameTable) == "table" and frameTable[widgetID] then
-            return frameTable[widgetID]
-        end
-    end
-
-    return nil
-end
-
-local function AttachStageFourMapClick(frameRef)
+AttachStageFourMapClick = function(frameRef)
     if not frameRef or STAGE_FOUR_CLICK_HOOKED[frameRef] then
         return
     end
@@ -2743,236 +2937,42 @@ local function AttachStageFourMapClick(frameRef)
     end
 end
 
-local function SetFrameIconVisible(targetFrame, shouldShow)
-    if not targetFrame then
-        return false
-    end
-
-    local didUpdate = false
-    local visited = {}
-    local iconFieldNames = {
-        "Icon",
-        "icon",
-        "IconTexture",
-        "iconTexture",
-        "LeftIcon",
-        "leftIcon",
-        "SpellIcon",
-        "spellIcon",
-    }
-
-    local function ScanFrame(frameRef, depth)
-        if not frameRef or visited[frameRef] or depth > 3 then
-            return
-        end
-
-        visited[frameRef] = true
-
-        local frameName = frameRef.GetName and frameRef:GetName() or nil
-        if IsLikelyIconName(frameName) and SetRegionShown(frameRef, shouldShow) then
-            didUpdate = true
-        end
-
-        if frameRef.GetRegions then
-            local regions = { frameRef:GetRegions() }
-            for _, region in ipairs(regions) do
-                local regionType = region and region.GetObjectType and region:GetObjectType() or nil
-                if regionType == "Texture" then
-                    local regionName = region.GetName and region:GetName() or nil
-                    if IsLikelyIconName(regionName) and SetRegionShown(region, shouldShow) then
-                        didUpdate = true
-                    end
-                end
-            end
-        end
-
-        if frameRef.GetChildren then
-            local children = { frameRef:GetChildren() }
-            for _, child in ipairs(children) do
-                ScanFrame(child, depth + 1)
-            end
-        end
-    end
-
-    for _, fieldName in ipairs(iconFieldNames) do
-        local region = targetFrame[fieldName]
-        if SetRegionShown(region, shouldShow) then
-            didUpdate = true
-        end
-    end
-
-    ScanFrame(targetFrame, 0)
-
-    return didUpdate
-end
-
-local function ApplySuppressionToParentChain(frameRef, suppress, maxDepth)
-    -- Emergency safety: parent-chain suppression can cascade into major UI roots.
-    -- Keep this disabled unless we can guarantee strict frame whitelisting.
-    return
-end
-
-local function FindGlobalFramesForWidgetID(widgetID, forceRefresh)
-    local okWidgetID, numericWidgetID = pcall(function()
-        return tonumber(widgetID)
-    end)
-    widgetID = okWidgetID and numericWidgetID or nil
-    if not widgetID then
-        return {}
-    end
-
-    if not forceRefresh and type(UI.targetedWidgetGlobalFrameCache[widgetID]) == "table" then
-        return UI.targetedWidgetGlobalFrameCache[widgetID]
-    end
-
-    local matches = {}
-    local widgetText = tostring(widgetID)
-    local maxMatches = 30
-    local seen = {}
-
-    local function pushMatch(keyText, frameRef)
-        if #matches >= maxMatches or not frameRef then
-            return
-        end
-
-        if seen[frameRef] then
-            return
-        end
-
-        seen[frameRef] = true
-        local name = nil
-        if frameRef.GetName then
-            local okName, resolvedName = pcall(frameRef.GetName, frameRef)
-            if okName then
-                name = resolvedName
-            end
-        end
-
-        matches[#matches + 1] = {
-            key = tostring(keyText or "?"),
-            name = name,
-            frame = frameRef,
-        }
-    end
-
-    local knownNames = {
-        "UIWidgetTopCenterContainerFrameWidget" .. widgetText,
-        "UIWidgetObjectiveTrackerContainerFrameWidget" .. widgetText,
-        "UIWidgetBelowMinimapContainerFrameWidget" .. widgetText,
-        "UIWidgetPowerBarContainerFrameWidget" .. widgetText,
-    }
-
-    for _, keyText in ipairs(knownNames) do
-        local frameRef = _G[keyText]
-        if frameRef then
-            pushMatch(keyText, frameRef)
-        end
-    end
-
-    local containerNames = {
-        "UIWidgetTopCenterContainerFrame",
-        "UIWidgetObjectiveTrackerContainerFrame",
-        "UIWidgetBelowMinimapContainerFrame",
-        "UIWidgetPowerBarContainerFrame",
-    }
-
-    local function scanContainerForWidgetID(root, rootKey)
-        if not root or not root.GetChildren then
-            return
-        end
-
-        local visited = {}
-        local function scan(node, depth)
-            if not node or visited[node] or depth > 6 or #matches >= maxMatches then
-                return
-            end
-
-            visited[node] = true
-            local nodeName = nil
-            if node.GetName then
-                local okName, resolvedName = pcall(node.GetName, node)
-                if okName then
-                    nodeName = resolvedName
-                end
-            end
-
-            if type(nodeName) == "string" and string.find(nodeName, widgetText, 1, true) ~= nil then
-                pushMatch((rootKey or "container") .. ":" .. nodeName, node)
-            end
-
-            if node.GetChildren then
-                local okChildren, children = pcall(function()
-                    return { node:GetChildren() }
-                end)
-                if okChildren and type(children) == "table" then
-                    for _, child in ipairs(children) do
-                        scan(child, depth + 1)
-                        if #matches >= maxMatches then
-                            break
-                        end
-                    end
-                end
-            end
-        end
-
-        scan(root, 0)
-    end
-
-    for _, containerKey in ipairs(containerNames) do
-        local container = _G[containerKey]
-        scanContainerForWidgetID(container, containerKey)
-    end
-
-    UI.targetedWidgetGlobalFrameCache[widgetID] = matches
-    return matches
-end
-
 ApplyDefaultPreyIconVisibility = function()
     if not settings then
         return
     end
 
-    if not (C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID) then
+    EnsurePreyHuntMixinSuppressionHook()
+    TrackKnownPreyWidgetFrames(state and state.lastPreyWidgetID)
+
+    -- Do not touch widget systems while idle; only process when we are actively
+    -- tracking prey or when icon suppression is enabled.
+    if settings.disableDefaultPreyIcon ~= true
+        and not IsValidQuestID(state and state.activeQuestID)
+        and not IsValidQuestID(state and state.cachedActivePreyQuestID)
+    then
         return
     end
 
-    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
-        or PREY_WIDGET_TYPE
     local suppressEncounter = settings.disableDefaultPreyIcon == true and ShouldSuppressDefaultPreyEncounter()
 
-    local containerGlobals = {
-        "UIWidgetTopCenterContainerFrame",
-        "UIWidgetObjectiveTrackerContainerFrame",
-        "UIWidgetBelowMinimapContainerFrame",
-        "UIWidgetPowerBarContainerFrame",
-    }
+    if preyHuntIconFrame then
+        PREY_WIDGET_FRAMES[preyHuntIconFrame] = true
+    end
 
-    for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-        local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
-        if not okWidgets or type(widgets) ~= "table" then
-            okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-        end
-        if type(widgets) == "table" then
-            for _, widget in ipairs(widgets) do
-                local okType, widgetType = pcall(function() return widget and widget.widgetType end)
-                local okID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
-                local numericWidgetID = okID and tonumber(rawWidgetID) or nil
-                if okType and widgetType == preyWidgetType and numericWidgetID then
-                    for _, globalName in ipairs(containerGlobals) do
-                        local container = _G[globalName]
-                        local widgetFrame = TryGetWidgetFrameByID(container, numericWidgetID)
-                        AttachStageFourMapClick(widgetFrame)
-                        EnsureWidgetSuppressionHook(widgetFrame)
-                        ApplyWidgetFrameSuppression(widgetFrame, suppressEncounter)
+    local suppressedAnyFrame = false
 
-                        local namedFrame = _G[globalName .. "Widget" .. tostring(numericWidgetID)]
-                        AttachStageFourMapClick(namedFrame)
-                        EnsureWidgetSuppressionHook(namedFrame)
-                        ApplyWidgetFrameSuppression(namedFrame, suppressEncounter)
-                    end
-                end
-            end
-        end
+    for frameRef in pairs(PREY_WIDGET_FRAMES) do
+        AttachStageFourMapClick(frameRef)
+        EnsureWidgetSuppressionHook(frameRef)
+        ApplyWidgetFrameSuppression(frameRef, suppressEncounter)
+        suppressedAnyFrame = true
+    end
+
+    if suppressEncounter and not suppressedAnyFrame then
+        ScheduleSuppressionRetry()
+    elseif not suppressEncounter then
+        suppressionRetryCount = 0
     end
 end
 
@@ -3182,22 +3182,28 @@ local function FindPreyWidgetProgressState(activeQuestID)
             for _, widget in ipairs(widgets) do
                 local okType, widgetType = pcall(function() return widget and widget.widgetType end)
                 local okID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
-                local numericWidgetID = okID and tonumber(rawWidgetID) or nil
-                if okType and widgetType == preyWidgetType and numericWidgetID then
+                local numericWidgetID = (okID and type(rawWidgetID) == "number") and rawWidgetID or nil
+                local okIsPreyType, isPreyType = pcall(function()
+                    return widgetType == preyWidgetType
+                end)
+                if okType and okIsPreyType and isPreyType and numericWidgetID then
                     local okInfo, info = pcall(C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo, numericWidgetID)
-                    if okInfo and info and info.shownState == shownStateShown then
+                    local okShown, isShown = pcall(function()
+                        return info and info.shownState == shownStateShown
+                    end)
+                    if okInfo and okShown and isShown then
                         local pct = ExtractProgressPercent(info, info.tooltip)
                         if IsValidQuestID(activeQuestID) then
                             local widgetQuestID = ExtractWidgetQuestID(info)
                             if widgetQuestID == activeQuestID then
-                                return info.progressState, info.tooltip, pct, numericWidgetID
+                                return info.progressState, info.tooltip, pct, nil
                             end
 
                             if widgetQuestID == nil and fallbackState == nil then
-                                fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = info.progressState, info.tooltip, pct, numericWidgetID
+                                fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = info.progressState, info.tooltip, pct, nil
                             end
                         else
-                            return info.progressState, info.tooltip, pct, numericWidgetID
+                            return info.progressState, info.tooltip, pct, nil
                         end
                     end
                 end
@@ -3216,6 +3222,7 @@ local function ResetStateForNewQuest(questID)
     if state.activeQuestID ~= questID then
         state.activeQuestID = questID
         state.lastPreyWidgetID = nil
+        state.lastPreyWidgetSetID = nil
         state.lastNotifiedPreyEndQuestID = nil
         state.progressState = nil
         state.progressPercent = nil
@@ -3877,12 +3884,22 @@ local function OnAddonLoaded()
     state.pollingActive = false
 
     EnsurePreyHuntMixinSuppressionHook()
+    if type(_G.IsAddOnLoaded) == "function" and _G.IsAddOnLoaded("Blizzard_UIWidgets") then
+        OnBlizzardWidgetsLoaded()
+    end
     RunModuleHook("OnAddonLoaded")
 end
 
-local function OnBlizzardWidgetsLoaded()
+OnBlizzardWidgetsLoaded = function()
     EnsurePreyHuntMixinSuppressionHook()
     ApplyDefaultPreyIconVisibility()
+end
+
+OnPlayerRegenEnabled = function()
+    if state.pendingWidgetSuppressionAfterCombat == true then
+        state.pendingWidgetSuppressionAfterCombat = false
+        ApplyDefaultPreyIconVisibility()
+    end
 end
 
 local function AddCheckbox(parent, label, x, y, getter, setter)
@@ -5064,6 +5081,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
             activePreyQuestCacheSeconds = ACTIVE_PREY_QUEST_CACHE_SECONDS,
             onAddonLoaded = OnAddonLoaded,
             onBlizzardWidgetsLoaded = OnBlizzardWidgetsLoaded,
+            onPlayerRegenEnabled = OnPlayerRegenEnabled,
             ensureOptionsPanel = EnsureOptionsPanel,
             handleSlashCommand = HandleSlashCommand,
             applyBarSettings = ApplyBarSettings,
@@ -5118,4 +5136,5 @@ frame:RegisterEvent("QUEST_ACCEPTED")
 frame:RegisterEvent("ZONE_CHANGED")
 frame:RegisterEvent("ZONE_CHANGED_INDOORS")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.1.5 - 2026-03-26
+
+### Release
+- Updated addon metadata version to `2.1.5` in TOC and release tooling defaults.
+
+## 2.1.4 - 2026-03-26
+
+### Fixed
+- Hardened prey-icon suppression to operate on tracked prey widget mixin frames directly, removing the broad cross-container global frame probing path.
+- Hardened prey-widget scanning so default prey icon visibility logic only queries prey-relevant widget sets (cached prey set + PowerBar) and no longer falls back to non-prey widget containers, preventing tooltip/widget-set taint spillover into Blizzard layout processing.
+- Tightened default prey icon suppression behavior so when `Disable Default Prey Icon` is enabled, the Blizzard prey encounter visual (including the stage-4 glow layer) is consistently suppressed.
+- Hardened prey icon suppression against residual icon/glow animation playback by stopping prey-frame animation groups and hiding prey icon/glow visual regions at suppression time.
+- Reworked settings dropdown high-DPI scaling to bind per-Preydator dropdown open handling instead of a global `ToggleDropDownMenu` hook.
+
+### Release
+- Updated addon metadata version to `2.1.4` in TOC and release tooling defaults.
+
+### Cleanup
+- Removed dead helper functions `TryGetWidgetFrameByID`, `SetFrameIconVisible`, `ApplySuppressionToParentChain`, and `FindGlobalFramesForWidgetID` from `Preydator.lua`. These became unreachable after the container-probing path was removed in this version's hardening pass.
+- Removed unused `UI.targetedWidgetGlobalFrameCache` field from the UI state table; no live code paths reference it after the global-frame scan helpers were deleted.
+
 ## 2.1.3 - 2026-03-25
 
 ### Fixed

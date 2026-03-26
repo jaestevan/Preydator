@@ -288,6 +288,31 @@ local function BuildInspectReport()
     add("- inPreyZone=" .. tostring(state.inPreyZone)
         .. " | onlyShowInPreyZone=" .. tostring(settings and settings.onlyShowInPreyZone == true)
         .. " | disableDefaultPreyIcon=" .. tostring(settings and settings.disableDefaultPreyIcon == true))
+
+    local suppressionDebug = nil
+    if type(Preydator.GetWidgetSuppressionDebug) == "function" then
+        local okSuppression, data = pcall(Preydator.GetWidgetSuppressionDebug)
+        if okSuppression and type(data) == "table" then
+            suppressionDebug = data
+        end
+    end
+    if suppressionDebug then
+        add("- suppression trackedFrames=" .. SafeValue(suppressionDebug.trackedFrames)
+            .. " | shownFrames=" .. SafeValue(suppressionDebug.shownFrames)
+            .. " | hiddenFrames=" .. SafeValue(suppressionDebug.hiddenFrames)
+            .. " | effectControllers=" .. SafeValue(suppressionDebug.effectControllers))
+        add("- suppression preyIconTracked=" .. SafeValue(suppressionDebug.preyIconTracked)
+            .. " | preyIconShown=" .. SafeValue(suppressionDebug.preyIconShown)
+            .. " | retryPending=" .. SafeValue(suppressionDebug.suppressionRetryPending)
+            .. " | retryCount=" .. SafeValue(suppressionDebug.suppressionRetryCount)
+            .. " | pendingAfterCombat=" .. SafeValue(suppressionDebug.pendingAfterCombat))
+        add("- suppression widgetRefs"
+            .. " | lastPreyWidgetID=" .. SafeValue(suppressionDebug.lastPreyWidgetID)
+            .. " | lastPreyWidgetSetID=" .. SafeValue(suppressionDebug.lastPreyWidgetSetID))
+    else
+        add("- suppression debug unavailable")
+    end
+
     add("- settings size width=" .. tostring(settings and settings.width)
         .. " | height=" .. tostring(settings and settings.height)
         .. " | scale=" .. tostring(settings and settings.scale))

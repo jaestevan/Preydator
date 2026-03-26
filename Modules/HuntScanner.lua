@@ -3946,7 +3946,9 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         LoadCompletedAchievementCache()
         ProcessRewardCacheLifecycle()
         achievementCacheDirty = true
-        EnsureAchievementNeedsCache(true)
+        -- Do NOT force EnsureAchievementNeedsCache here. The dirty flag above defers
+        -- the expensive 52-achievement/criteria pcall rebuild to the first panel open,
+        -- eliminating the synchronous login CPU spike.
         ApplyMissionHooks()
         SyncNoisyEventSubscriptions()
         return

@@ -151,15 +151,23 @@ function PreyContextRuntime:RefreshInPreyZoneStatus(questID, force, state, ctx)
     end
 
     local inPreyZone = nil
+    local usedOnMapFallback = false
     if state.preyZoneMapID then
         inPreyZone = self:IsPlayerInPreyZone(state.preyZoneMapID, state, ctx)
     else
+        usedOnMapFallback = true
         inPreyZone = self:IsPreyQuestOnCurrentMap(questID, ctx)
+        if inPreyZone == false then
+            -- Some prey quests do not expose a stable task-quest zone map ID and
+            -- may also report isOnMap=false while the player is actually in-zone.
+            -- Treat this as unknown so we do not incorrectly hide the bar.
+            inPreyZone = nil
+        end
         -- For quests with no task-quest map ID, treat this as our zone snapshot.
         state.zoneCacheDirty = false
     end
 
-    if inPreyZone == nil then
+    if inPreyZone == nil and not usedOnMapFallback then
         inPreyZone = self:IsPreyQuestOnCurrentMap(questID, ctx)
         state.zoneCacheDirty = false
     end

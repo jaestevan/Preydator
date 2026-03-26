@@ -21,10 +21,6 @@ local UIDropDownMenu_AddButton = _G.UIDropDownMenu_AddButton
 local ColorPickerFrame = _G.ColorPickerFrame
 local OpacitySliderFrame = _G.OpacitySliderFrame
 local C_CurrencyInfo = _G.C_CurrencyInfo
-local hooksecurefunc = _G.hooksecurefunc
-
-local preydatorDropdownRegistry = setmetatable({}, { __mode = "k" })
-local dropdownScaleHookInstalled = false
 
 local function ApplyDropdownListScale(level, dropDownFrame)
     if not dropDownFrame or not dropDownFrame.GetEffectiveScale then
@@ -45,19 +41,28 @@ local function ApplyDropdownListScale(level, dropDownFrame)
     listFrame:SetScale(desiredScale)
 end
 
-local function EnsureDropdownScaleHook()
-    if dropdownScaleHookInstalled or type(hooksecurefunc) ~= "function" then
+local function BindDropdownScale(dropdown)
+    if not dropdown or dropdown.PreydatorScaleHookBound then
         return
     end
 
-    hooksecurefunc("ToggleDropDownMenu", function(level, _, dropDownFrame)
-        if not dropDownFrame or not preydatorDropdownRegistry[dropDownFrame] then
+    local button = dropdown.Button
+    if not button then
+        return
+    end
+
+    dropdown.PreydatorScaleHookBound = true
+    button:HookScript("OnClick", function()
+        local timer = _G.C_Timer
+        if timer and type(timer.After) == "function" then
+            timer.After(0, function()
+                ApplyDropdownListScale(1, dropdown)
+            end)
             return
         end
-        ApplyDropdownListScale(level, dropDownFrame)
-    end)
 
-    dropdownScaleHookInstalled = true
+        ApplyDropdownListScale(1, dropdown)
+    end)
 end
 
 local COLUMN_LEFT_X = 5
@@ -406,8 +411,7 @@ local function CreateDropdown(parent, x, y, label, width, options, getter, sette
 
     local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
     dropdown:SetPoint("TOPLEFT", title, "BOTTOMLEFT", -16, -4)
-    preydatorDropdownRegistry[dropdown] = true
-    EnsureDropdownScaleHook()
+    BindDropdownScale(dropdown)
 
     local function GetOptions()
         if type(options) == "function" then

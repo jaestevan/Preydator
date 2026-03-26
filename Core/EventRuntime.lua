@@ -54,6 +54,10 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
         end
     end
 
+    if event == "PLAYER_REGEN_ENABLED" and type(ctx.onPlayerRegenEnabled) == "function" then
+        ctx.onPlayerRegenEnabled()
+    end
+
     local isRestrictedInstance = type(ctx.isRestrictedInstanceForPreyBar) == "function"
         and ctx.isRestrictedInstanceForPreyBar() == true
 
@@ -102,6 +106,9 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
     if isRestrictedInstance and event ~= "PLAYER_LOGIN" then
         if type(ctx.setPollingActive) == "function" then
             ctx.setPollingActive(false)
+        end
+        if type(ctx.updateBarDisplay) == "function" then
+            ctx.updateBarDisplay()
         end
         return true
     end
