@@ -1216,61 +1216,10 @@ local function RefreshInPreyZoneStatus(questID, force)
         return state.inPreyZone
     end
 
-    local inPreyZone = nil
-    local usedOnMapFallback = false
-    if state.preyZoneMapID then
-        if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
-            if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
-                local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
-                local okNumericMapID, playerMapID = pcall(function()
-                    return tonumber(rawPlayerMapID)
-                end)
-                playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
-                state.playerMapID = playerMapID
-                state.playerMapHierarchy = {}
-                state.zoneCacheDirty = false
-
-                local guard = 0
-                local currentMapID = playerMapID
-                while currentMapID and guard < 20 do
-                    state.playerMapHierarchy[currentMapID] = true
-
-                    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, currentMapID)
-                    mapInfo = okMapInfo and mapInfo or nil
-                    local okParentMapID, parentMapID = pcall(function()
-                        return tonumber(mapInfo and mapInfo.parentMapID)
-                    end)
-                    parentMapID = (okParentMapID and parentMapID and parentMapID > 0) and parentMapID or nil
-                    if not parentMapID then
-                        break
-                    end
-
-                    currentMapID = parentMapID
-                    guard = guard + 1
-                end
-            end
-
-            if state.playerMapID then
-                inPreyZone = state.playerMapHierarchy[state.preyZoneMapID] == true
-            end
-        end
-    else
-        usedOnMapFallback = true
-        inPreyZone = IsPreyQuestOnCurrentMap(questID)
-        if inPreyZone == false then
-            -- Some prey quests do not expose a stable task-quest zone map ID and
-            -- may also report isOnMap=false while the player is actually in-zone.
-            -- Treat this as unknown so we do not incorrectly hide the bar.
-            inPreyZone = nil
-        end
-        -- For quests with no task-quest map ID, treat this as our zone snapshot.
-        state.zoneCacheDirty = false
-    end
-
-    if inPreyZone == nil and not usedOnMapFallback then
-        inPreyZone = IsPreyQuestOnCurrentMap(questID)
-        state.zoneCacheDirty = false
-    end
+    local inPreyZone = IsPreyQuestOnCurrentMap(questID)
+    state.playerMapID = nil
+    state.playerMapHierarchy = nil
+    state.zoneCacheDirty = false
 
     state.inPreyZone = inPreyZone
     state.lastZoneStatusRefreshAt = now
@@ -1429,27 +1378,6 @@ local function IsRestrictedInstanceForPreyBar()
             or instanceType == "raid"
             or instanceType == "scenario"
             or instanceType == "delve"
-    end
-
-    -- Fallback: some Delve transitions can report inconsistent IsInInstance states
-    -- while the player map is already a dungeon-type map.
-    if C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo then
-        local okPlayerMapID, rawPlayerMapID = pcall(C_Map.GetBestMapForUnit, "player")
-        local okNumericMapID, playerMapID = pcall(function()
-            return tonumber(rawPlayerMapID)
-        end)
-        playerMapID = (okPlayerMapID and okNumericMapID and playerMapID and playerMapID > 0) and playerMapID or nil
-        if playerMapID then
-            local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, playerMapID)
-            mapInfo = okMapInfo and mapInfo or nil
-            local okMapType, mapType = pcall(function()
-                return tonumber(mapInfo and mapInfo.mapType)
-            end)
-            mapType = (okMapType and mapType and mapType > 0) and mapType or nil
-            if mapType == 4 then
-                return true
-            end
-        end
     end
 
     return false
@@ -3236,25 +3164,8 @@ local function ResetStateForNewQuest(questID)
                 mapApi = C_Map,
             })
         else
-            if questID and C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_Map and C_Map.GetMapInfo then
-                local okMapID, rawMapID = pcall(C_TaskQuest.GetQuestZoneID, questID)
-                local okNumericMapID, mapID = pcall(function()
-                    return tonumber(rawMapID)
-                end)
-                mapID = (okMapID and okNumericMapID and mapID and mapID > 0) and mapID or nil
-                if mapID then
-                    local okMapInfo, mapInfo = pcall(C_Map.GetMapInfo, mapID)
-                    mapInfo = okMapInfo and mapInfo or nil
-                    state.preyZoneName = mapInfo and mapInfo.name or nil
-                    state.preyZoneMapID = mapID
-                else
-                    state.preyZoneName = nil
-                    state.preyZoneMapID = nil
-                end
-            else
-                state.preyZoneName = nil
-                state.preyZoneMapID = nil
-            end
+            state.preyZoneName = nil
+            state.preyZoneMapID = nil
         end
         state.inPreyZone = nil
         RefreshInPreyZoneStatus(questID, true)

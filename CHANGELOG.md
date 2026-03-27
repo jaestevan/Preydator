@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.6 - 2026-03-26
+
+### Release
+- Updated addon metadata version to `2.1.6` in TOC and release tooling defaults.
+
 ## 2.1.5 - 2026-03-26
 
 ### Release

@@ -7,31 +7,9 @@ local PreyContextRuntime = {}
 Preydator:RegisterModule("PreyContextRuntime", PreyContextRuntime)
 
 function PreyContextRuntime:GetPreyZoneInfo(questID, ctx)
-    if not questID then
-        return nil, nil
-    end
-
-    local taskQuestApi = ctx and ctx.taskQuestApi
-    local mapApi = ctx and ctx.mapApi
-    if not (taskQuestApi and taskQuestApi.GetQuestZoneID and mapApi and mapApi.GetMapInfo) then
-        return nil, nil
-    end
-
-    local okMapID, rawMapID = pcall(taskQuestApi.GetQuestZoneID, questID)
-    local okNumericMapID, numericMapID = pcall(function()
-        return tonumber(rawMapID)
-    end)
-    local mapID = nil
-    if okMapID and okNumericMapID and numericMapID and numericMapID > 0 then
-        mapID = numericMapID
-    end
-    if not mapID then
-        return nil, nil
-    end
-
-    local okMapInfo, mapInfo = pcall(mapApi.GetMapInfo, mapID)
-    mapInfo = okMapInfo and mapInfo or nil
-    return (mapInfo and mapInfo.name or nil), mapID
+    -- Taint-safe: avoid task-quest and map-ID probing here. These APIs can
+    -- return protected numbers that later poison Blizzard Area POI/tooltips.
+    return nil, nil
 end
 
 function PreyContextRuntime:GetCurrentActivePreyQuest(ctx)
@@ -44,60 +22,7 @@ function PreyContextRuntime:GetCurrentActivePreyQuest(ctx)
 end
 
 function PreyContextRuntime:IsPlayerInPreyZone(preyMapID, state, ctx)
-    if not preyMapID then
-        return nil
-    end
-
-    if type(state) ~= "table" then
-        return nil
-    end
-
-    local mapApi = ctx and ctx.mapApi
-    if not (mapApi and mapApi.GetBestMapForUnit and mapApi.GetMapInfo) then
-        return nil
-    end
-
-    if state.zoneCacheDirty == true or type(state.playerMapHierarchy) ~= "table" then
-        local okPlayerMapID, rawPlayerMapID = pcall(mapApi.GetBestMapForUnit, "player")
-        local okNumericMapID, numericPlayerMapID = pcall(function()
-            return tonumber(rawPlayerMapID)
-        end)
-        local playerMapID = nil
-        if okPlayerMapID and okNumericMapID and numericPlayerMapID and numericPlayerMapID > 0 then
-            playerMapID = numericPlayerMapID
-        end
-        state.playerMapID = playerMapID
-        state.playerMapHierarchy = {}
-        state.zoneCacheDirty = false
-
-        local guard = 0
-        local currentMapID = playerMapID
-        while currentMapID and guard < 20 do
-            state.playerMapHierarchy[currentMapID] = true
-
-            local okMapInfo, mapInfo = pcall(mapApi.GetMapInfo, currentMapID)
-            mapInfo = okMapInfo and mapInfo or nil
-            local okParentMapID, numericParentMapID = pcall(function()
-                return tonumber(mapInfo and mapInfo.parentMapID)
-            end)
-            local parentMapID = nil
-            if okParentMapID and numericParentMapID and numericParentMapID > 0 then
-                parentMapID = numericParentMapID
-            end
-            if not parentMapID then
-                break
-            end
-
-            currentMapID = parentMapID
-            guard = guard + 1
-        end
-    end
-
-    if not state.playerMapID then
-        return nil
-    end
-
-    return state.playerMapHierarchy[preyMapID] == true
+    return nil
 end
 
 function PreyContextRuntime:IsPreyQuestOnCurrentMap(questID, ctx)
@@ -150,27 +75,10 @@ function PreyContextRuntime:RefreshInPreyZoneStatus(questID, force, state, ctx)
         return state.inPreyZone
     end
 
-    local inPreyZone = nil
-    local usedOnMapFallback = false
-    if state.preyZoneMapID then
-        inPreyZone = self:IsPlayerInPreyZone(state.preyZoneMapID, state, ctx)
-    else
-        usedOnMapFallback = true
-        inPreyZone = self:IsPreyQuestOnCurrentMap(questID, ctx)
-        if inPreyZone == false then
-            -- Some prey quests do not expose a stable task-quest zone map ID and
-            -- may also report isOnMap=false while the player is actually in-zone.
-            -- Treat this as unknown so we do not incorrectly hide the bar.
-            inPreyZone = nil
-        end
-        -- For quests with no task-quest map ID, treat this as our zone snapshot.
-        state.zoneCacheDirty = false
-    end
-
-    if inPreyZone == nil and not usedOnMapFallback then
-        inPreyZone = self:IsPreyQuestOnCurrentMap(questID, ctx)
-        state.zoneCacheDirty = false
-    end
+    local inPreyZone = self:IsPreyQuestOnCurrentMap(questID, ctx)
+    state.playerMapID = nil
+    state.playerMapHierarchy = nil
+    state.zoneCacheDirty = false
 
     state.inPreyZone = inPreyZone
     state.lastZoneStatusRefreshAt = now
