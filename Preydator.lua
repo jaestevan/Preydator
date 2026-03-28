@@ -2257,6 +2257,7 @@ local function ClearPreyStateAndDisplay()
     state.lastWidgetSeenAt = 0
     state.lastPreyWidgetID = nil
     state.lastPreyWidgetSetID = nil
+    preyWidgetInfoCache = nil
     state.stageSoundPlayed = {}
     state.stageSoundAttempted = {}
     state.lastStateDebugSnapshot = nil
@@ -2380,6 +2381,7 @@ local STAGE_FOUR_CLICK_HOOKED = setmetatable({}, { __mode = "k" })
 local PREY_WIDGET_FRAMES = setmetatable({}, { __mode = "k" })
 local preyHuntMixinHooked = false
 local preyHuntIconFrame = nil
+local preyWidgetInfoCache = nil  -- snapshot from mixin Setup hook; avoids taint-prone GetAllWidgetsBySetID scans
 local suppressionRetryPending = false
 local suppressionRetryCount = 0
 
@@ -2700,9 +2702,33 @@ local function EnsurePreyHuntMixinSuppressionHook()
 
     -- hooksecurefunc fires AFTER Blizzard's Setup() runs AnimIn/ResetAnimState/SetAlpha(1)/Show(),
     -- so re-hiding here lands at the right point in the sequence.
-    local ok = pcall(hooksecurefunc, mixin, "Setup", function(self)
+    -- widgetInfo is passed by Blizzard's widget system; we copy only non-secret fields
+    -- (progressState, tooltip, shownState, questID, percent-related) to avoid reading
+    -- widgetID/widgetType secret numbers that would taint subsequent Blizzard layout ops.
+    local ok = pcall(hooksecurefunc, mixin, "Setup", function(self, widgetInfo)
         preyHuntIconFrame = self
         PREY_WIDGET_FRAMES[self] = true
+        if type(widgetInfo) == "table" then
+            preyWidgetInfoCache = {
+                progressState    = widgetInfo.progressState,
+                tooltip          = widgetInfo.tooltip,
+                shownState       = widgetInfo.shownState,
+                questID          = widgetInfo.questID,
+                questId          = widgetInfo.questId,
+                associatedQuestID  = widgetInfo.associatedQuestID,
+                associatedQuestId  = widgetInfo.associatedQuestId,
+                progressPercentage = widgetInfo.progressPercentage,
+                progressPercent    = widgetInfo.progressPercent,
+                barValue           = widgetInfo.barValue,
+                barMax             = widgetInfo.barMax,
+                value              = widgetInfo.value,
+                currentValue       = widgetInfo.currentValue,
+                maxValue           = widgetInfo.maxValue,
+                totalValue         = widgetInfo.totalValue,
+                total              = widgetInfo.total,
+                max                = widgetInfo.max,
+            }
+        end
         AttachStageFourMapClick(self)
         EnsureWidgetSuppressionHook(self)
 
@@ -3091,59 +3117,30 @@ ExtractWidgetQuestID = function(info)
     return nil
 end
 
+-- Reads prey widget state from the snapshot captured by the mixin Setup hook.
+-- Never calls GetAllWidgetsBySetID or reads widgetID/widgetType fields; those are
+-- secret numbers that taint subsequent Blizzard layout/widget operations even inside pcall.
 local function FindPreyWidgetProgressState(activeQuestID)
-    if not (C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID and C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo) then
-        return nil
+    local info = preyWidgetInfoCache
+    if not info then
+        return nil, nil, nil, nil
     end
 
-    local preyWidgetType = (Enum and Enum.UIWidgetVisualizationType and Enum.UIWidgetVisualizationType.PreyHuntProgress)
-        or PREY_WIDGET_TYPE
     local shownStateShown = (Enum and Enum.WidgetShownState and Enum.WidgetShownState.Shown) or WIDGET_SHOWN
-    local fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = nil, nil, nil, nil
-
-    for _, setID in ipairs(GetCandidateWidgetSetIDs()) do
-        local okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, C_UIWidgetManager, setID)
-        if not okWidgets or type(widgets) ~= "table" then
-            okWidgets, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-        end
-        if type(widgets) == "table" then
-            for _, widget in ipairs(widgets) do
-                local okType, widgetType = pcall(function() return widget and widget.widgetType end)
-                local okID, rawWidgetID = pcall(function() return widget and widget.widgetID end)
-                local numericWidgetID = (okID and type(rawWidgetID) == "number") and rawWidgetID or nil
-                local okIsPreyType, isPreyType = pcall(function()
-                    return widgetType == preyWidgetType
-                end)
-                if okType and okIsPreyType and isPreyType and numericWidgetID then
-                    local okInfo, info = pcall(C_UIWidgetManager.GetPreyHuntProgressWidgetVisualizationInfo, numericWidgetID)
-                    local okShown, isShown = pcall(function()
-                        return info and info.shownState == shownStateShown
-                    end)
-                    if okInfo and okShown and isShown then
-                        local pct = ExtractProgressPercent(info, info.tooltip)
-                        if IsValidQuestID(activeQuestID) then
-                            local widgetQuestID = ExtractWidgetQuestID(info)
-                            if widgetQuestID == activeQuestID then
-                                return info.progressState, info.tooltip, pct, nil
-                            end
-
-                            if widgetQuestID == nil and fallbackState == nil then
-                                fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID = info.progressState, info.tooltip, pct, nil
-                            end
-                        else
-                            return info.progressState, info.tooltip, pct, nil
-                        end
-                    end
-                end
-            end
-        end
+    if info.shownState ~= shownStateShown then
+        return nil, nil, nil, nil
     end
 
+    local pct = ExtractProgressPercent(info, info.tooltip)
     if IsValidQuestID(activeQuestID) then
-        return fallbackState, fallbackTooltip, fallbackPct, fallbackWidgetID
+        local widgetQuestID = ExtractWidgetQuestID(info)
+        if widgetQuestID == activeQuestID or widgetQuestID == nil then
+            return info.progressState, info.tooltip, pct, nil
+        end
+        return nil, nil, nil, nil
     end
 
-    return nil, nil, nil
+    return info.progressState, info.tooltip, pct, nil
 end
 
 local function ResetStateForNewQuest(questID)
@@ -3157,6 +3154,7 @@ local function ResetStateForNewQuest(questID)
         state.stageSoundPlayed = {}
         state.stageSoundAttempted = {}
         state.stage = 1
+        preyWidgetInfoCache = nil
         local runtime = GetRuntimeModule("PreyContextRuntime")
         if runtime and type(runtime.GetPreyZoneInfo) == "function" then
             state.preyZoneName, state.preyZoneMapID = runtime:GetPreyZoneInfo(questID, {

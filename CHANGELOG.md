@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.7 - 2026-03-27
+
+### Fixed
+- Fixed Hunt Tracker showing a Nightmare hunt in the wrong zone (2 hunts in one zone, 0 in the other). Root cause: hunt quest zone resolution APIs (`C_TaskQuest.GetQuestZoneID` and `C_Map.GetMapInfoAtPosition`) return nil for adventure map quest-offer pins, forcing fallback to hardcoded coordinate buckets in `InferZoneFromCoords`. The original thresholds were imprecise: `x > 0.70` and `y > 0.55` caused southern Eversong Woods pins (ny=0.678) to be misclassified as Zul'Aman. Fixed by calibrating thresholds to all 12 hunt locations: Harandar (x > 0.78), Voidstorm (x > 0.50 && y < 0.30), Eversong Woods (x < 0.35), Zul'Aman (else). Zone is now resolved correctly for all hunt quests across all four zones.
+- Fixed `Blizzard_MoneyFrame` secret-number taint on world-quest reward tooltips by removing HuntScanner reads of taint-prone numeric reward payload fields during reward parsing/caching, and failing closed on those paths.
+- Fixed intermittent HuntScanner `snapshot error` chat reports in restricted-content transitions (including delves) by replacing remaining raw `tonumber(...)` conversions in live snapshot/event paths with `SafeToNumber(...)` fail-closed coercion.
+- Fixed hunt-table warm-up repeatedly inspecting the same representative quests when icon-upgrade fallback returned empty by preserving existing cached rewards instead of clearing them, preventing repeated 4-quest refresh spam.
+- Fixed reward icon/count regressions from over-hardened extraction by restoring safe itemID/itemLink and quantity field parsing in dialog reward snapshots (still fail-closed via protected coercion/calls).
+- Restricted reward inspection/review to strict Hunt Table mission context only (active interaction type 3 + mission map tab shown), preventing reward probing outside the table.
+- Fixed quests getting stuck on `No tracked rewards` despite `cachedRewards` being populated by treating empty per-quest reward cache entries as pending data, re-allowing warm-up and difficulty-cache backfill for those rows.
+- Fixed Hunt Table `Icon+Count` reward style failing to show counts for cached entries formatted as `Name xN` by extending count parsing to support both leading-amount and trailing-amount patterns.
+- Fixed `bad argument #1 to 'SetWidth' (Secret values are only allowed during untainted execution)` errors triggered during World Quests by removing all `C_UIWidgetManager.GetAllWidgetsBySetID` widget-type/ID field reads from prey widget scanning. Reading `widgetType`/`widgetID` from `GetAllWidgetsBySetID` results propagates secret-number taint even inside `pcall`, corrupting Blizzard's subsequent layout processing for unrelated widgets (e.g. TextWithState "Runestone State:"). Prey widget state is now read from a snapshot captured by the existing `UIWidgetTemplatePreyHuntProgressMixin.Setup` hook, which copies only non-secret fields (progressState, tooltip, shownState, questID, percent fields) and never touches secret-number widget identity fields.
+
+### Cleanup
+- Streamlined Hunt Table reward rendering by consolidating duplicated preview/live reward-style formatting into one shared formatter, reducing code surface while preserving behavior.
+- Further streamlined HuntScanner reward cache flow by deduplicating reward-score and empty-cache checks into shared helpers, reducing repeated logic across warm-up and render paths.
+- Continued HuntScanner cleanup by extracting shared reward-style/icon helpers and removing repeated inline checks in reward summary formatting paths.
+- Finalized this cleanup pass by centralizing reward-style settings lookup in one helper shared by preview and live reward-summary paths.
+
 ## 2.1.6 - 2026-03-26
 
 ### Release
