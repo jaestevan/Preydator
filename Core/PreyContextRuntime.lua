@@ -6,6 +6,22 @@ end
 local PreyContextRuntime = {}
 Preydator:RegisterModule("PreyContextRuntime", PreyContextRuntime)
 
+local QUEST_ZONE_MAP_OVERRIDES = {
+    [91260] = 2437,
+}
+
+local MAP_ID_EQUIVALENTS = {
+    [2536] = 2437,
+}
+
+local function CanonicalizeMapID(mapID)
+    mapID = tonumber(mapID)
+    if not mapID or mapID < 1 then
+        return nil
+    end
+    return MAP_ID_EQUIVALENTS[mapID] or mapID
+end
+
 function PreyContextRuntime:GetPreyZoneInfo(questID, ctx)
     -- Taint-safe: avoid task-quest and map-ID probing here. These APIs can
     -- return protected numbers that later poison Blizzard Area POI/tooltips.
@@ -45,7 +61,26 @@ function PreyContextRuntime:IsPreyQuestOnCurrentMap(questID, ctx)
         return nil
     end
 
-    return info.isOnMap == true
+    if info.isOnMap == true then
+        return true
+    end
+
+    -- Targeted fallback for known map-ID mismatch cases where quest-log
+    -- isOnMap can be false on a child/sub-map while the player is still
+    -- in the valid prey zone map context.
+    local expectedMapID = QUEST_ZONE_MAP_OVERRIDES[tonumber(questID)]
+    if expectedMapID ~= nil then
+        local mapApi = ctx and ctx.mapApi
+        if mapApi and type(mapApi.GetBestMapForUnit) == "function" then
+            local okMapID, rawMapID = pcall(mapApi.GetBestMapForUnit, "player")
+            local playerMapID = okMapID and CanonicalizeMapID(rawMapID) or nil
+            if playerMapID and playerMapID == expectedMapID then
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
 function PreyContextRuntime:RefreshInPreyZoneStatus(questID, force, state, ctx)
@@ -63,14 +98,20 @@ function PreyContextRuntime:RefreshInPreyZoneStatus(questID, force, state, ctx)
     local now = (type(getTime) == "function" and getTime()) or 0
     local staleFalseCheck = state.inPreyZone == false
         and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
+    local staleTrueCheck = state.inPreyZone == true
+        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
 
-    if staleFalseCheck then
+    if staleFalseCheck or staleTrueCheck then
         -- Force a map hierarchy rebuild during retry checks so we do not stay
         -- stuck on a stale map snapshot after loading-screen transitions.
         state.zoneCacheDirty = true
     end
 
-    local shouldRefresh = force == true or state.inPreyZone == nil or state.zoneCacheDirty == true or staleFalseCheck
+    local shouldRefresh = force == true
+        or state.inPreyZone == nil
+        or state.zoneCacheDirty == true
+        or staleFalseCheck
+        or staleTrueCheck
     if not shouldRefresh then
         return state.inPreyZone
     end

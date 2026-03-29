@@ -4014,7 +4014,12 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if (not noisyEvent) or GetHasHuntContext() then
-        RecordEvent(event, ...)
+        if noisyEvent then
+            -- Do not read noisy widget payload args; they can be secret values.
+            RecordEvent(event)
+        else
+            RecordEvent(event, ...)
+        end
     end
 
     if event == "PLAYER_LOGIN" then

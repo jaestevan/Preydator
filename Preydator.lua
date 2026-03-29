@@ -9,7 +9,6 @@ local ColorPickerFrame = _G.ColorPickerFrame
 local OpacitySliderFrame = _G.OpacitySliderFrame
 local Enum = _G.Enum
 local C_QuestLog = _G["C_QuestLog"]
-local C_UIWidgetManager = _G["C_UIWidgetManager"]
 local C_TaskQuest = _G["C_TaskQuest"]
 local C_Map = _G["C_Map"]
 local C_SuperTrack = _G["C_SuperTrack"]
@@ -108,7 +107,7 @@ local STAGE_PCT_BY_SEGMENT = {
         [4] = 100,
     },
     [PROGRESS_SEGMENTS_THIRDS] = {
-        [1] = 33,
+        [1] = 0,
         [2] = 33,
         [3] = 66,
         [4] = 100,
@@ -399,7 +398,6 @@ local UI = {
     optionsCategoryID = false,
     optionsScrollFrame = false,
     optionsContentFrame = false,
-    candidateWidgetSetIDs = {},
     colorPickerSessionCounter = 0,
 }
 
@@ -442,8 +440,6 @@ local state = {
     preyTooltipText = nil,
     elapsedSinceUpdate = 0,
     lastWidgetSeenAt = 0,
-    lastPreyWidgetID = nil,
-    lastPreyWidgetSetID = nil,
     lastStateDebugSnapshot = nil,
     lastDisplayPct = 0,
     lastDisplayReason = "init",
@@ -1374,7 +1370,9 @@ local function IsRestrictedInstanceForPreyBar()
     end
 
     if inInstance then
-        return instanceType == "party"
+        return instanceType == "pvp"
+            or instanceType == "arena"
+            or instanceType == "party"
             or instanceType == "raid"
             or instanceType == "scenario"
             or instanceType == "delve"
@@ -2255,8 +2253,6 @@ local function ClearPreyStateAndDisplay()
     state.stage = 1
     state.killStageUntil = 0
     state.lastWidgetSeenAt = 0
-    state.lastPreyWidgetID = nil
-    state.lastPreyWidgetSetID = nil
     preyWidgetInfoCache = nil
     state.stageSoundPlayed = {}
     state.stageSoundAttempted = {}
@@ -2307,38 +2303,6 @@ local function DebugLogPreyState(origin, questID, hasWidgetData, progressState, 
         .. " | state=" .. tostring(progressState)
         .. " | pct=" .. tostring(progressPercent)
         .. " | inZone=" .. tostring(inPreyZone), false)
-end
-
-local function GetCandidateWidgetSetIDs()
-    for index = #UI.candidateWidgetSetIDs, 1, -1 do
-        UI.candidateWidgetSetIDs[index] = nil
-    end
-
-    local seenSetIDs = {}
-
-    local function appendWidgetSetID(getter)
-        if not getter then
-            return
-        end
-        local okSetID, rawSetID = pcall(getter)
-        if not okSetID then
-            return
-        end
-        local okValidSetID, isValidSetID = pcall(function()
-            return type(rawSetID) == "number" and rawSetID > 0
-        end)
-        if okValidSetID and isValidSetID and not seenSetIDs[rawSetID] then
-            seenSetIDs[rawSetID] = true
-            UI.candidateWidgetSetIDs[#UI.candidateWidgetSetIDs + 1] = rawSetID
-        end
-    end
-
-    if C_UIWidgetManager then
-        -- Keep widget-set access scoped to PowerBar (the known prey host).
-        appendWidgetSetID(C_UIWidgetManager.GetPowerBarWidgetSetID)
-    end
-
-    return UI.candidateWidgetSetIDs
 end
 
 local function IsLikelyIconName(value)
@@ -2423,44 +2387,6 @@ local function CaptureLivePreyHuntFrames()
             PREY_WIDGET_FRAMES[child] = true
             preyHuntIconFrame = child
         end
-    end
-end
-
-local function TrackKnownPreyWidgetFrames(widgetID)
-    local numericWidgetID = (type(widgetID) == "number" and widgetID > 0) and widgetID or nil
-    if not numericWidgetID then
-        CaptureLivePreyHuntFrames()
-        return
-    end
-
-    -- Use the safe container API to resolve the frame for this specific widget ID.
-    -- We do NOT walk container children and read .widgetID fields, as those are
-    -- secret numbers that taint the Lua execution context.
-    local containerNames = {
-        "UIWidgetPowerBarContainerFrame",
-        "UIWidgetTopCenterContainerFrame",
-        "UIWidgetBelowMinimapContainerFrame",
-        "UIWidgetObjectiveTrackerContainerFrame",
-    }
-    for _, containerName in ipairs(containerNames) do
-        local container = _G[containerName]
-        if container and container.GetWidgetFrame then
-            local okFrame, frameRef = pcall(container.GetWidgetFrame, container, numericWidgetID)
-            if okFrame and frameRef then
-                PREY_WIDGET_FRAMES[frameRef] = true
-            end
-        end
-    end
-
-    -- Fallback: if we still have no tracked frames, scan container children by
-    -- mixin method presence (never reads secret widgetID/widgetType fields).
-    local hasAny = false
-    for _ in pairs(PREY_WIDGET_FRAMES) do
-        hasAny = true
-        break
-    end
-    if not hasAny then
-        CaptureLivePreyHuntFrames()
     end
 end
 
@@ -2654,8 +2580,6 @@ local function GetWidgetSuppressionDebugSnapshot()
         suppressionRetryPending = suppressionRetryPending,
         suppressionRetryCount = suppressionRetryCount,
         pendingAfterCombat = state and state.pendingWidgetSuppressionAfterCombat == true,
-        lastPreyWidgetID = state and state.lastPreyWidgetID or nil,
-        lastPreyWidgetSetID = state and state.lastPreyWidgetSetID or nil,
     }
 end
 
@@ -2702,49 +2626,26 @@ local function EnsurePreyHuntMixinSuppressionHook()
 
     -- hooksecurefunc fires AFTER Blizzard's Setup() runs AnimIn/ResetAnimState/SetAlpha(1)/Show(),
     -- so re-hiding here lands at the right point in the sequence.
-    -- widgetInfo is passed by Blizzard's widget system; we copy only non-secret fields
-    -- (progressState, tooltip, shownState, questID, percent-related) to avoid reading
-    -- widgetID/widgetType secret numbers that would taint subsequent Blizzard layout ops.
+    -- IMPORTANT: Never read widgetID, widgetSetID, or geometry fields from the widget payload.
+    -- Those are secret numbers; reading them here and passing to Blizzard layout APIs taints
+    -- layout arithmetic. Game-state fields (progressState, shownState, tooltip) are safe to
+    -- read inside pcall for our own display use only.
     local ok = pcall(hooksecurefunc, mixin, "Setup", function(self, widgetInfo)
         preyHuntIconFrame = self
         PREY_WIDGET_FRAMES[self] = true
 
-        -- Hard fail-closed in restricted instances: do not touch widget payload fields.
-        -- Some widget payload values become secret in this context; reading them here can
-        -- taint Blizzard's later widget/layout arithmetic in unrelated templates.
-        if IsRestrictedInstanceForPreyBar() then
-            preyWidgetInfoCache = nil
-            AttachStageFourMapClick(self)
-            EnsureWidgetSuppressionHook(self)
-
-            if ShouldSuppressEncounterNow() then
-                ApplyWidgetFrameSuppression(self, true)
-            else
-                ApplyWidgetFrameSuppression(self, false)
-            end
-            return
-        end
-
+        -- Capture only game-state fields for stage tracking.
+        -- widgetID, widgetSetID, and geometry fields are secret numbers; never read those.
+        -- progressState/shownState are plain enum ints, not layout-identity values, so they
+        -- do not propagate taint into Blizzard's layout paths.
         if type(widgetInfo) == "table" then
             preyWidgetInfoCache = {
-                progressState    = widgetInfo.progressState,
-                tooltip          = widgetInfo.tooltip,
-                shownState       = widgetInfo.shownState,
-                questID          = widgetInfo.questID,
-                questId          = widgetInfo.questId,
-                associatedQuestID  = widgetInfo.associatedQuestID,
-                associatedQuestId  = widgetInfo.associatedQuestId,
-                progressPercentage = widgetInfo.progressPercentage,
-                progressPercent    = widgetInfo.progressPercent,
-                barValue           = widgetInfo.barValue,
-                barMax             = widgetInfo.barMax,
-                value              = widgetInfo.value,
-                currentValue       = widgetInfo.currentValue,
-                maxValue           = widgetInfo.maxValue,
-                totalValue         = widgetInfo.totalValue,
-                total              = widgetInfo.total,
-                max                = widgetInfo.max,
+                shownState    = widgetInfo.shownState,
+                progressState = widgetInfo.progressState,
+                tooltip       = type(widgetInfo.tooltip) == "string" and widgetInfo.tooltip or nil,
             }
+        else
+            preyWidgetInfoCache = nil
         end
         AttachStageFourMapClick(self)
         EnsureWidgetSuppressionHook(self)
@@ -2914,7 +2815,7 @@ ApplyDefaultPreyIconVisibility = function()
     end
 
     EnsurePreyHuntMixinSuppressionHook()
-    TrackKnownPreyWidgetFrames(state and state.lastPreyWidgetID)
+    CaptureLivePreyHuntFrames()
 
     -- Do not touch widget systems while idle; only process when we are actively
     -- tracking prey or when icon suppression is enabled.
@@ -3144,7 +3045,9 @@ local function FindPreyWidgetProgressState(activeQuestID)
     end
 
     local shownStateShown = (Enum and Enum.WidgetShownState and Enum.WidgetShownState.Shown) or WIDGET_SHOWN
-    if info.shownState ~= shownStateShown then
+    -- Only reject if shownState is explicitly a non-shown value; nil is allowed because
+    -- shownState can be a protected number that reads as nil in insecure context.
+    if info.shownState ~= nil and info.shownState ~= shownStateShown then
         return nil, nil, nil, nil
     end
 
@@ -3163,8 +3066,6 @@ end
 local function ResetStateForNewQuest(questID)
     if state.activeQuestID ~= questID then
         state.activeQuestID = questID
-        state.lastPreyWidgetID = nil
-        state.lastPreyWidgetSetID = nil
         state.lastNotifiedPreyEndQuestID = nil
         state.progressState = nil
         state.progressPercent = nil
@@ -3236,17 +3137,14 @@ local function UpdatePreyState()
         end
     end
 
-    local newProgressState, tooltipText, newProgressPercent, detectedWidgetID = nil, nil, nil, nil
+    local newProgressState, tooltipText, newProgressPercent = nil, nil, nil
     if hasActiveQuest then
-        newProgressState, tooltipText, newProgressPercent, detectedWidgetID = FindPreyWidgetProgressState(questID)
+        newProgressState, tooltipText, newProgressPercent = FindPreyWidgetProgressState(questID)
     end
     local hasWidgetData = newProgressState ~= nil
 
     if hasWidgetData then
         state.lastWidgetSeenAt = now
-        if detectedWidgetID then
-            state.lastPreyWidgetID = detectedWidgetID
-        end
     end
 
     local effectiveQuestID = hasActiveQuest and questID or nil
@@ -3318,6 +3216,7 @@ local function UpdatePreyState()
 
     local oldStage = state.stage
     local newStage = GetStageFromState(state.progressState)
+    state.stage = newStage
 
     local stageChanged = newStage ~= oldStage
     if stageChanged then
@@ -4997,6 +4896,12 @@ local function HandleSlashCommand(message)
 end
 
 frame:SetScript("OnEvent", function(_, event, arg1, arg2)
+    -- Taint safety: nil widget event payload args before any cross-boundary call.
+    -- UPDATE_UI_WIDGET args are secret-number widget IDs; passing them as function
+    -- arguments propagates taint into the callee even if they are not used there.
+    if event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS" then
+        arg1, arg2 = nil, nil
+    end
     local runtime = GetRuntimeModule("EventRuntime")
     if runtime and type(runtime.HandleEvent) == "function" then
         runtime:HandleEvent(event, arg1, arg2, {

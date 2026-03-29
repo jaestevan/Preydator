@@ -14,6 +14,13 @@ function EventRuntime:HandleEvent(event, arg1, arg2, ctx)
         return false
     end
 
+    -- Taint safety: never propagate noisy widget payload args.
+    -- UPDATE_UI_WIDGET args can carry secret-number values; addons should not
+    -- read/forward them unless absolutely required.
+    if event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS" then
+        arg1, arg2 = nil, nil
+    end
+
     local state = ctx.state
     local ui = ctx.ui
 

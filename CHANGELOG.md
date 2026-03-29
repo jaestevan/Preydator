@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1.9 - 2026-03-29
+
+### Fixed
+- Hardened prey widget mixin handling to read only safe game-state fields from `Setup(widgetInfo)` (`progressState`, `shownState`, `tooltip`) while never reading taint-prone widget identity/geometry fields, preserving stage progression without reintroducing secret-number taint paths.
+- Hardened all noisy widget hook/event fanout paths to drop `UPDATE_UI_WIDGET` payload args before module dispatch/debug capture, preventing secret-value payload propagation through addon hook callbacks.
+- Fixed remaining taint propagation path where `UPDATE_UI_WIDGET` secret-number payload args were passed across the main `OnEvent` → core runtime function call boundary before being nil'd. Passing a secret value as a function argument spreads taint into the callee's execution context regardless of whether it is used, which could corrupt unrelated Blizzard layout operations (e.g. `AreaPoiUtil.lua:65 SetPadding`). Args are now nil'd in the main handler before any function call.
+- Removed dead `GetCandidateWidgetSetIDs` function and its `C_UIWidgetManager.GetPowerBarWidgetSetID` call and `rawSetID > 0` secret-number comparison, which were unreachable but could have introduced taint if ever triggered. Removed associated `C_UIWidgetManager` local and `candidateWidgetSetIDs` UI state field.
+- Fixed prey-stage progression regression introduced during taint hardening by restoring controlled `widgetInfo` capture in the prey mixin hook; stage now advances correctly from live widget state while remaining fail-closed on taint-prone fields.
+- Fixed stale `inPreyZone=true` state persisting across zone transitions/hearth moves by adding periodic true-state revalidation in prey-zone refresh logic (not just stale-false retries), preventing out-of-zone stage-1 fallback bars from showing when `Only show in prey zone` is enabled.
+- Updated fallback stage-gate progression to match intended semantics: Thirds now uses `0/33/66/100` (stage 1 is zone gate), while Quarters remains `25/50/75/100`.
+- Hardened bar visibility to strict no-instance behavior by treating `pvp` and `arena` instance types as restricted alongside party/raid/scenario/delve, so the bar cannot show in any instance regardless of `Only show in prey zone`.
+- Fixed prey-zone false negatives in known sub-map mismatch cases by adding a deterministic map-alias fallback in zone resolution (`2536` treated as prey-zone map `2437` for affected prey quest context), removing icon/signal-driven zone fallback so bar visibility is based on stable map data rather than default prey-icon visibility.
+
+### Cleanup
+- Removed dormant prey widget-ID tracking/state paths (`TrackKnownPreyWidgetFrames`, `lastPreyWidgetID`, `lastPreyWidgetSetID`, and related debug output) so suppression now relies only on live prey-mixin frame capture, reducing stale code surface and future taint reintroduction risk.
+
 ## 2.1.8 - 2026-03-28
 
 ### Fixed

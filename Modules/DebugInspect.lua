@@ -306,9 +306,6 @@ local function BuildInspectReport()
             .. " | retryPending=" .. SafeValue(suppressionDebug.suppressionRetryPending)
             .. " | retryCount=" .. SafeValue(suppressionDebug.suppressionRetryCount)
             .. " | pendingAfterCombat=" .. SafeValue(suppressionDebug.pendingAfterCombat))
-        add("- suppression widgetRefs"
-            .. " | lastPreyWidgetID=" .. SafeValue(suppressionDebug.lastPreyWidgetID)
-            .. " | lastPreyWidgetSetID=" .. SafeValue(suppressionDebug.lastPreyWidgetSetID))
     else
         add("- suppression debug unavailable")
     end
