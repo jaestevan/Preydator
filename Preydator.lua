@@ -108,7 +108,7 @@ local STAGE_PCT_BY_SEGMENT = {
         [4] = 100,
     },
     [PROGRESS_SEGMENTS_THIRDS] = {
-        [1] = 0,
+        [1] = 33,
         [2] = 33,
         [3] = 66,
         [4] = 100,
@@ -2708,6 +2708,23 @@ local function EnsurePreyHuntMixinSuppressionHook()
     local ok = pcall(hooksecurefunc, mixin, "Setup", function(self, widgetInfo)
         preyHuntIconFrame = self
         PREY_WIDGET_FRAMES[self] = true
+
+        -- Hard fail-closed in restricted instances: do not touch widget payload fields.
+        -- Some widget payload values become secret in this context; reading them here can
+        -- taint Blizzard's later widget/layout arithmetic in unrelated templates.
+        if IsRestrictedInstanceForPreyBar() then
+            preyWidgetInfoCache = nil
+            AttachStageFourMapClick(self)
+            EnsureWidgetSuppressionHook(self)
+
+            if ShouldSuppressEncounterNow() then
+                ApplyWidgetFrameSuppression(self, true)
+            else
+                ApplyWidgetFrameSuppression(self, false)
+            end
+            return
+        end
+
         if type(widgetInfo) == "table" then
             preyWidgetInfoCache = {
                 progressState    = widgetInfo.progressState,

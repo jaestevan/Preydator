@@ -259,6 +259,10 @@ IsInRestrictedInstance = function()
 end
 
 IsOptionsPreviewVisible = function()
+    if IsInRestrictedInstance() then
+        return false
+    end
+
     local settings = GetSettings()
     if not settings then
         return false
@@ -3553,6 +3557,11 @@ local function ApplyMissionHooks()
 end
 
 function HuntScannerModule:ApplySettings()
+    if IsInRestrictedInstance() then
+        HidePanel()
+        return
+    end
+
     EnsureSettings()
     ProcessRewardCacheLifecycle()
     if IsOptionsPreviewVisible() then
@@ -3576,6 +3585,11 @@ function HuntScannerModule:SetPreviewEnabled(enabled)
         settings.huntScannerPreviewInOptions = enabled == true
     end
 
+    if IsInRestrictedInstance() then
+        HidePanel()
+        return
+    end
+
     if enabled == true and IsOptionsPreviewVisible() then
         RenderPanel(BuildPreviewRows())
         return
@@ -3590,6 +3604,11 @@ function HuntScannerModule:SetPreviewEnabled(enabled)
 end
 
 function HuntScannerModule:HandleOptionsPanelVisibility(isVisible)
+    if IsInRestrictedInstance() then
+        HidePanel()
+        return
+    end
+
     if isVisible == true then
         if IsOptionsPreviewVisible() then
             RenderPanel(BuildPreviewRows())
@@ -3622,6 +3641,11 @@ function HuntScannerModule:SetThemePreviewEnabled(enabled)
     local settings = GetSettings()
     if settings then
         settings.themeEditorPreviewInOptions = enabled == true
+    end
+
+    if IsInRestrictedInstance() then
+        HidePanel()
+        return
     end
 
     if IsOptionsPreviewVisible() then
@@ -3750,7 +3774,7 @@ QueueInteractionSnapshotPasses = function(force)
 end
 
 function HuntScannerModule:RefreshNow()
-    if not IsHuntRuntimeEnabled() then
+    if not IsHuntRuntimeEnabled() or IsInRestrictedInstance() then
         HidePanel()
         return
     end
@@ -3764,7 +3788,7 @@ function HuntScannerModule:RefreshNow()
 end
 
 function HuntScannerModule:RefreshRewardCache()
-    if not IsHuntRuntimeEnabled() then
+    if not IsHuntRuntimeEnabled() or IsInRestrictedInstance() then
         HidePanel()
         return
     end

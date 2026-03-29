@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.8 - 2026-03-28
+
+### Fixed
+- Fixed non-final prey stages being able to display an over-reported 100% bar when live widget/objective percent payloads reached 100 before Blizzard advanced the prey widget to final stage. Non-final display percent is now capped to the selected segment ceiling for the resolved stage, so Thirds and Quarters cannot report completion early.
+- Fixed Thirds stage fallback progression mismatch so documented and rendered fallback stages now align to `33/66/100` behavior instead of leaving stage 1 at `0%` when live percent data is unavailable.
+- Hardened HuntScanner to a strict no-instance rule, including disabling options/theme preview and refresh paths while in restricted content where prey hunts and Hunt Table interactions cannot occur.
+- Fixed restricted-instance Blizzard widget taint in delve/combat paths by fail-closing the prey-widget mixin hook before reading widget payload fields while in restricted content, preventing secret-value taint propagation into Blizzard widget layout arithmetic.
+
 ## 2.1.7 - 2026-03-27
 
 ### Fixed

@@ -591,7 +591,7 @@ local function UpdateBarDisplay()
     UI.barFrame:Show()
 
     local stage = forceKillStage and constants.MAX_STAGE or ctx.getStageFromState(state.progressState)
-    local pct = 0
+    local pct = 0.0
     local displayReason = "default"
     if forceKillStage then
         pct = 100
@@ -614,6 +614,10 @@ local function UpdateBarDisplay()
             end
         else
             pct = state.progressPercent
+            local stageCeiling = tonumber(ctx.getStageFallbackPercent(stage)) or 0
+            if pct ~= nil and stage >= 1 and stageCeiling > 0 then
+                pct = math.min(pct, stageCeiling)
+            end
             local shouldUseStageFallback = (pct == nil) or (stage >= 1 and pct <= 0)
 
             if shouldUseStageFallback then
