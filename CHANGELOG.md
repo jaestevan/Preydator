@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.11 - 2026-03-31
+
+### Fixed
+- Fixed HuntScanner snapshot errors in scenarios. The restricted-instance event gate previously had a selective event-name list, leaving `ACHIEVEMENT_EARNED`, `CRITERIA_UPDATE`, and `QUEST_DATA_LOAD_RESULT` able to fall through and trigger snapshot passes when `huntInteractionActive` was stale-true from a prior Hunt Table session. The gate is now a blanket early-return for all events (except `PLAYER_LOGIN`) when inside any restricted instance type.
+- Hardened stage-4 prey waypoint fallback against protected world-map payloads. Preydator no longer reads `C_QuestLog.GetNextWaypoint()` and related quest-map coordinate fields through raw `tonumber(...)`/direct numeric comparisons, reducing another remaining path that could spill taint into Blizzard map tooltip/layout code such as `AreaPoiUtil.lua`.
+
 ## 2.1.10 - 2026-03-30
 
 ### Fixed

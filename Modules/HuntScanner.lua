@@ -4075,20 +4075,8 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
             SyncNoisyEventSubscriptions()
         end
 
-        if event == "GOSSIP_SHOW"
-            or event == "GOSSIP_CLOSED"
-            or event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW"
-            or event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE"
-            or event == "QUEST_DETAIL"
-            or event == "QUEST_PROGRESS"
-            or event == "QUEST_COMPLETE"
-            or event == "QUEST_FINISHED"
-            or event == "QUEST_LOG_UPDATE"
-            or event == "UPDATE_UI_WIDGET"
-            or event == "UPDATE_ALL_UI_WIDGETS" then
-            HidePanel()
-            return
-        end
+        HidePanel()
+        return
     end
 
     if event == "GOSSIP_SHOW" then

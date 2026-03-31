@@ -2771,18 +2771,46 @@ ShouldSuppressDefaultPreyEncounter = function()
     return settings and settings.disableDefaultPreyIcon == true
 end
 
+local function SafeFieldRead(tbl, key)
+    if type(tbl) ~= "table" then
+        return nil
+    end
+
+    local ok, value = pcall(function()
+        return tbl[key]
+    end)
+    if ok then
+        return value
+    end
+
+    return nil
+end
+
+local function SafeToNumber(value)
+    local ok, result = pcall(tonumber, value)
+    if ok and type(result) == "number" then
+        return result
+    end
+
+    return nil
+end
+
 local function TryGetPreyQuestWaypoint(questID)
     if not IsValidQuestID(questID) then
         return nil, nil, nil
     end
 
     if C_QuestLog and C_QuestLog.GetNextWaypoint then
-        local waypoint = C_QuestLog.GetNextWaypoint(questID)
+        local okWaypoint, waypoint = pcall(C_QuestLog.GetNextWaypoint, questID)
+        waypoint = okWaypoint and waypoint or nil
         if type(waypoint) == "table" then
-            local waypointMapID = tonumber(waypoint.uiMapID or waypoint.mapID)
-            local waypointX = tonumber((waypoint.position and waypoint.position.x) or waypoint.x)
-            local waypointY = tonumber((waypoint.position and waypoint.position.y) or waypoint.y)
-            if waypointMapID and waypointX and waypointY then
+            local waypointPosition = SafeFieldRead(waypoint, "position")
+            local waypointMapID = SafeToNumber(SafeFieldRead(waypoint, "uiMapID")) or SafeToNumber(SafeFieldRead(waypoint, "mapID"))
+            local waypointX = SafeToNumber(type(waypointPosition) == "table" and SafeFieldRead(waypointPosition, "x") or nil)
+                or SafeToNumber(SafeFieldRead(waypoint, "x"))
+            local waypointY = SafeToNumber(type(waypointPosition) == "table" and SafeFieldRead(waypointPosition, "y") or nil)
+                or SafeToNumber(SafeFieldRead(waypoint, "y"))
+            if waypointMapID and waypointMapID > 0 and waypointX and waypointY then
                 return waypointMapID, waypointX, waypointY
             end
         end
@@ -2792,7 +2820,7 @@ local function TryGetPreyQuestWaypoint(questID)
     local seenMapIDs = {}
 
     local function addMapCandidate(mapID)
-        mapID = tonumber(mapID)
+        mapID = SafeToNumber(mapID)
         if mapID and mapID > 0 and not seenMapIDs[mapID] then
             seenMapIDs[mapID] = true
             mapCandidates[#mapCandidates + 1] = mapID
@@ -2811,6 +2839,8 @@ local function TryGetPreyQuestWaypoint(questID)
             if not okCoords then
                 x, y = nil, nil
             end
+            x = SafeToNumber(x)
+            y = SafeToNumber(y)
             if x and y then
                 return mapID, x, y
             end
@@ -2823,8 +2853,11 @@ local function TryGetPreyQuestWaypoint(questID)
             questsOnMap = okQuests and questsOnMap or nil
             if type(questsOnMap) == "table" then
                 for _, questInfo in ipairs(questsOnMap) do
-                    if questInfo and questInfo.questID == questID and questInfo.x and questInfo.y then
-                        return mapID, questInfo.x, questInfo.y
+                    local infoQuestID = SafeToNumber(SafeFieldRead(questInfo, "questID"))
+                    local infoX = SafeToNumber(SafeFieldRead(questInfo, "x"))
+                    local infoY = SafeToNumber(SafeFieldRead(questInfo, "y"))
+                    if infoQuestID == questID and infoX and infoY then
+                        return mapID, infoX, infoY
                     end
                 end
             end
