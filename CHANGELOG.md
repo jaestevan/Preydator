@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.10 - 2026-03-30
+
+### Fixed
+- Fixed world-map mouseover taint (`Blizzard_UIWidgetTemplateBase.lua:1638`, secret-number arithmetic tainted by Preydator) by fail-closing HuntScanner dialog reward snapshot parsing on item payload identity fields. Reward extraction now reads only display-safe text/texture fields and no longer reads `itemID`/`itemLink`/numeric quantity payload values from Blizzard reward widget tables.
+- Fixed Hunt Table reward icon regression introduced by the taint hardening pass. Icon rendering now restores safe direct display-icon extraction (texture/atlas fields) while still avoiding taint-prone `itemID`/`itemLink` reward identity reads.
+- Tightened HuntScanner noisy event gating to strict Hunt Table/preview context only. `UPDATE_UI_WIDGET`/`UPDATE_ALL_UI_WIDGETS`/`QUEST_LOG_UPDATE` subscriptions and processing no longer wake on active-prey world-quest state alone.
+- Fixed legacy/invalid Hunt Table reward-style settings being treated as text-only. Reward style now normalizes to valid keys on load and icon-mode cache warm-up repopulates stale no-icon reward entries.
+- Fixed Hunt Table icon backfill repeatedly walking many quests in the same difficulty. Cache replacement now prefers icon-bearing reward lists at equal score and propagates difficulty rewards across same-difficulty quests in one warm-up pass.
+- Fixed HuntScanner snapshot runtime error (`attempt to call global 'RewardListHasIconTags'`) caused by helper declaration order during reward-cache replacement checks.
+- Added prey-zone map alias fallback for Harandar sub-map mismatch cases (`2576` treated as `2413`) in the same canonical map-ID equivalence path used for prior Zul'Aman-style mismatches.
+- Simplified bar-side zone matching to a lightweight generic path: compare canonical player map ID with canonical quest-zone map ID from `C_TaskQuest.GetQuestZoneID`, while preserving the prior Zul'Aman deterministic fallback (`2536` -> `2437`) and explicit override safety when task-zone lookup is unavailable.
+- Restored the proven 2.1.9 prey stage resolution path after today's inferred-stage fallback experiments regressed live progression. Stage now follows the same live widget-driven behavior as 2.1.9 instead of attempting tooltip/objective stage inference.
+- Improved prey-zone entry responsiveness by reducing false-zone retry refresh cadence (`2.0s` -> `0.5s`) so zone transitions are recognized faster while keeping true-state revalidation conservative.
+
 ## 2.1.9 - 2026-03-29
 
 ### Fixed

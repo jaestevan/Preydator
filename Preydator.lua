@@ -466,6 +466,8 @@ local state = {
 
 local UPDATE_INTERVAL_SECONDS = 0.5
 local INSPECT_VERSION = "v4"
+local ExtractWidgetQuestID
+local FindPreyWidgetProgressState
 
 Preydator.GetState = function()
     return state
@@ -1157,6 +1159,7 @@ local function IsPreyQuestOnCurrentMap(questID)
     if runtime and type(runtime.IsPreyQuestOnCurrentMap) == "function" then
         return runtime:IsPreyQuestOnCurrentMap(questID, {
             questLog = C_QuestLog,
+            taskQuestApi = C_TaskQuest,
         })
     end
 
@@ -1189,6 +1192,7 @@ local function RefreshInPreyZoneStatus(questID, force)
             getTime = GetTime,
             mapApi = C_Map,
             questLog = C_QuestLog,
+            taskQuestApi = C_TaskQuest,
         })
     end
 
@@ -1198,8 +1202,9 @@ local function RefreshInPreyZoneStatus(questID, force)
     end
 
     local now = GetTime and GetTime() or 0
+    -- Recheck false-zone state quickly so zone entry reflects without long delays.
     local staleFalseCheck = state.inPreyZone == false
-        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
+        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 0.5
 
     if staleFalseCheck then
         -- Force a map hierarchy rebuild during retry checks so we do not stay
@@ -2585,6 +2590,64 @@ end
 
 Preydator.GetWidgetSuppressionDebug = GetWidgetSuppressionDebugSnapshot
 
+local function ReadPreyValueFromObject(obj, keyName)
+    if type(obj) ~= "table" then
+        return nil
+    end
+
+    local okDirect, directValue = pcall(function()
+        return obj[keyName]
+    end)
+    if okDirect and directValue ~= nil then
+        return directValue
+    end
+
+    local getterName = "Get" .. string.upper(string.sub(keyName, 1, 1)) .. string.sub(keyName, 2)
+    local okGetter, getter = pcall(function()
+        return obj[getterName]
+    end)
+    if okGetter and type(getter) == "function" then
+        local okCall, value = pcall(getter, obj)
+        if okCall and value ~= nil then
+            return value
+        end
+    end
+
+    return nil
+end
+
+local function ResolvePreyFieldsFromFrame(self)
+    if type(self) ~= "table" then
+        return nil, nil, nil, nil
+    end
+
+    local sources = {
+        { name = "frame", value = self },
+        { name = "frame.widgetInfo", value = ReadPreyValueFromObject(self, "widgetInfo") },
+        { name = "frame.widgetData", value = ReadPreyValueFromObject(self, "widgetData") },
+        { name = "frame.dataSource", value = ReadPreyValueFromObject(self, "dataSource") },
+        { name = "frame.info", value = ReadPreyValueFromObject(self, "info") },
+    }
+
+    for _, source in ipairs(sources) do
+        local obj = source.value
+        if type(obj) == "table" then
+            local shownState = ReadPreyValueFromObject(obj, "shownState")
+            local progressState = ReadPreyValueFromObject(obj, "progressState")
+            local tooltip = ReadPreyValueFromObject(obj, "tooltip")
+            if type(tooltip) ~= "string" then
+                tooltip = nil
+            end
+
+            if shownState ~= nil or progressState ~= nil or tooltip ~= nil then
+                return shownState, progressState, tooltip, source.name
+            end
+        end
+    end
+
+    return nil, nil, nil, nil
+end
+
 local function ShouldSuppressEncounterNow()
     return settings
         and settings.disableDefaultPreyIcon == true
@@ -2638,11 +2701,47 @@ local function EnsurePreyHuntMixinSuppressionHook()
         -- widgetID, widgetSetID, and geometry fields are secret numbers; never read those.
         -- progressState/shownState are plain enum ints, not layout-identity values, so they
         -- do not propagate taint into Blizzard's layout paths.
+        local shownState = nil
+        local progressState = nil
+        local tooltipText = nil
+        local captureSource = "none"
+
         if type(widgetInfo) == "table" then
+            shownState = widgetInfo.shownState
+            progressState = widgetInfo.progressState
+            if type(widgetInfo.tooltip) == "string" then
+                tooltipText = widgetInfo.tooltip
+            end
+            if shownState ~= nil or progressState ~= nil or tooltipText ~= nil then
+                captureSource = "widgetInfo"
+            end
+        end
+
+        -- Some clients deliver sparse Setup payloads; if so, read the same fields
+        -- from post-Setup frame containers without touching widget identity values.
+        if shownState == nil or progressState == nil or tooltipText == nil then
+            local frameShownState, frameProgressState, frameTooltip, frameSource = ResolvePreyFieldsFromFrame(self)
+            if shownState == nil then
+                shownState = frameShownState
+            end
+            if progressState == nil then
+                progressState = frameProgressState
+            end
+            if tooltipText == nil then
+                tooltipText = frameTooltip
+            end
+            if frameSource ~= nil and (shownState ~= nil or progressState ~= nil or tooltipText ~= nil) then
+                captureSource = frameSource
+            end
+        end
+
+        if shownState ~= nil or progressState ~= nil or tooltipText ~= nil then
             preyWidgetInfoCache = {
-                shownState    = widgetInfo.shownState,
-                progressState = widgetInfo.progressState,
-                tooltip       = type(widgetInfo.tooltip) == "string" and widgetInfo.tooltip or nil,
+                shownState = shownState,
+                progressState = progressState,
+                tooltip = tooltipText,
+                captureSource = captureSource,
+                argType = type(widgetInfo),
             }
         else
             preyWidgetInfoCache = nil
@@ -3038,9 +3137,58 @@ end
 -- Reads prey widget state from the snapshot captured by the mixin Setup hook.
 -- Never calls GetAllWidgetsBySetID or reads widgetID/widgetType fields; those are
 -- secret numbers that taint subsequent Blizzard layout/widget operations even inside pcall.
-local function FindPreyWidgetProgressState(activeQuestID)
+FindPreyWidgetProgressState = function(activeQuestID)
+    local function TryBuildCacheFromFrame(frameRef, sourceTag)
+        if not frameRef then
+            return nil
+        end
+
+        local shownState, progressState, tooltipText, fieldSource = ResolvePreyFieldsFromFrame(frameRef)
+        if shownState == nil and progressState == nil and tooltipText == nil then
+            return nil
+        end
+
+        local captureSource = sourceTag
+        if fieldSource and fieldSource ~= "" then
+            captureSource = captureSource .. ":" .. fieldSource
+        end
+
+        return {
+            shownState = shownState,
+            progressState = progressState,
+            tooltip = tooltipText,
+            captureSource = captureSource,
+            argType = "frame-fallback",
+        }
+    end
+
+    local function BuildCacheFromTrackedFrames()
+        local refreshed = TryBuildCacheFromFrame(preyHuntIconFrame, "liveFrame")
+        if refreshed then
+            return refreshed
+        end
+
+        for frameRef in pairs(PREY_WIDGET_FRAMES) do
+            refreshed = TryBuildCacheFromFrame(frameRef, "trackedFrame")
+            if refreshed then
+                return refreshed
+            end
+        end
+
+        return nil
+    end
+
     local info = preyWidgetInfoCache
-    if not info then
+    -- Keep the cache synchronized with live/tracked prey frames each pass.
+    -- Some clients stop delivering full Setup payloads after the first update,
+    -- which can freeze progression if we only trust stale cached state.
+    local refreshed = BuildCacheFromTrackedFrames()
+    if refreshed then
+        info = refreshed
+        preyWidgetInfoCache = refreshed
+    elseif not info then
+        return nil, nil, nil, nil
+    elseif info.progressState == nil then
         return nil, nil, nil, nil
     end
 
@@ -3191,7 +3339,10 @@ local function UpdatePreyState()
     if newProgressPercent ~= nil then
         state.progressPercent = newProgressPercent
         percentSource = "widget"
-    else
+    elseif newProgressState == nil then
+        -- When live widget stage exists but widget percent is absent, stay on
+        -- stage-gate fallback percent. Objective text percent can lag behind and
+        -- produce misleading mid-stage values (e.g., 50% while widget is stage 3/4).
         local objectivePercent = ExtractQuestObjectivePercent(questID)
         if objectivePercent ~= nil and (objectivePercent > 0 or newProgressState == PREY_PROGRESS_FINAL) then
             state.progressPercent = objectivePercent

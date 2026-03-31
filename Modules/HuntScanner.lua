@@ -106,6 +106,7 @@ local IsAchievementCompletedCached
 local AddAchievementNameMatch
 local BuildAchievementMatchKey
 local AddAchievementNeed
+local RewardListHasIconTags
 
 local function SetNoisyEventSubscriptions(enabled)
     if not huntEventFrame then
@@ -140,11 +141,9 @@ local function SyncNoisyEventSubscriptions()
         return
     end
 
-    local panelShown = panelFrame and panelFrame.IsShown and panelFrame:IsShown() == true
     local enabled = IsMissionFrameVisible()
         or huntInteractionActive
         or IsOptionsPreviewVisible()
-        or (HasActivePreyQuest() and panelShown)
     SetNoisyEventSubscriptions(enabled)
 end
 
@@ -292,7 +291,26 @@ local function StripRewardIconTags(text)
         return ""
     end
 
-    return (text:gsub("|T[^|]+|t%s*", ""))
+    local withoutTexture = text:gsub("|T[^|]+|t%s*", "")
+    return (withoutTexture:gsub("|A[^|]+|a%s*", ""))
+end
+
+local function ExtractInlineRewardIconTag(text)
+    if type(text) ~= "string" or text == "" then
+        return nil
+    end
+
+    local textureTag = text:match("(|T[^|]+|t)")
+    if textureTag and textureTag ~= "" then
+        return textureTag
+    end
+
+    local atlasTag = text:match("(|A[^|]+|a)")
+    if atlasTag and atlasTag ~= "" then
+        return atlasTag
+    end
+
+    return nil
 end
 
 local function ExtractRewardAmountText(text)
@@ -327,6 +345,32 @@ local function GetRewardListScore(list)
     return score
 end
 
+local function ShouldReplaceRewardList(candidateList, existingList)
+    if type(candidateList) ~= "table" then
+        return false
+    end
+
+    if type(existingList) ~= "table" then
+        return true
+    end
+
+    local candidateScore = GetRewardListScore(candidateList)
+    local existingScore = GetRewardListScore(existingList)
+    if candidateScore > existingScore then
+        return true
+    end
+
+    if candidateScore == existingScore then
+        local candidateHasIcons = RewardListHasIconTags(candidateList)
+        local existingHasIcons = RewardListHasIconTags(existingList)
+        if candidateHasIcons and not existingHasIcons then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function IsRewardCacheMissingOrEmpty(cachedRewards)
     return cachedRewards == nil or (type(cachedRewards) == "table" and #cachedRewards == 0)
 end
@@ -340,14 +384,14 @@ local function GetConfiguredHuntRewardStyle()
     return settings.huntScannerRewardStyle or "icon_text"
 end
 
-local function RewardListHasIconTags(list)
+function RewardListHasIconTags(list)
     if type(list) ~= "table" then
         return false
     end
 
     for _, entry in ipairs(list) do
         local text = tostring(entry or "")
-        if text:find("|T", 1, true) then
+        if text:find("|T", 1, true) or text:find("|A", 1, true) then
             return true
         end
     end
@@ -372,7 +416,7 @@ local function FormatRewardEntriesForStyle(list, rewardStyle)
             if not showIcons then
                 text = StripRewardIconTags(text)
             elseif iconCount then
-                local iconTag = text:match("(|T[^|]+|t)")
+                local iconTag = ExtractInlineRewardIconTag(text)
                 local stripped = StripRewardIconTags(text)
                 local amount = ExtractRewardAmountText(stripped)
                 if iconTag and amount then
@@ -383,7 +427,7 @@ local function FormatRewardEntriesForStyle(list, rewardStyle)
                     text = stripped
                 end
             elseif iconOnly then
-                local iconTag = text:match("(|T[^|]+|t)")
+                local iconTag = ExtractInlineRewardIconTag(text)
                 text = iconTag or StripRewardIconTags(text)
             end
 
@@ -653,6 +697,13 @@ local function EnsureSettings()
 
     if settings.huntScannerShowRewardIcons == nil then
         settings.huntScannerShowRewardIcons = true
+    end
+
+    if settings.huntScannerRewardStyle ~= "icon_text"
+        and settings.huntScannerRewardStyle ~= "icon_count"
+        and settings.huntScannerRewardStyle ~= "text_only"
+        and settings.huntScannerRewardStyle ~= "icon_only" then
+        settings.huntScannerRewardStyle = (settings.huntScannerShowRewardIcons == false) and "text_only" or "icon_text"
     end
 
     if type(settings.huntScannerDifficultyColors) ~= "table" then
@@ -2058,56 +2109,41 @@ local function SnapshotDialogRewards()
             return nil
         end
 
+        local function GetSafeIconToken(value)
+            if type(value) == "string" and value ~= "" then
+                return value
+            end
+
+            if type(value) == "number" then
+                local token = SafeToString(value)
+                if token:match("^%d+$") then
+                    return token
+                end
+            end
+
+            return nil
+        end
+
         local iconKeys = {
             "Icon", "icon", "IconTexture", "iconTexture", "ItemIcon", "itemIcon", "texture", "Texture",
         }
 
         for _, key in ipairs(iconKeys) do
             local value = SafeTableField(reward, key)
-            if type(value) == "string" and value ~= "" then
-                return value
-            end
-            if type(value) == "number" and value > 0 then
-                return value
+            local iconToken = GetSafeIconToken(value)
+            if iconToken then
+                return iconToken
             end
             if type(value) == "table" then
                 local tex = SafeTableMethodValue(value, "GetTexture")
-                if type(tex) == "string" and tex ~= "" then
-                    return tex
-                end
-                if type(tex) == "number" and tex > 0 then
-                    return tex
-                end
-            end
-        end
-
-        local itemIDKeys = { "ItemID", "itemID", "itemId", "itemid" }
-        for _, key in ipairs(itemIDKeys) do
-            local itemID = SafeToNumber(SafeTableField(reward, key))
-            if itemID and itemID > 0 then
-                if C_Item and type(C_Item.GetItemIconByID) == "function" then
-                    local okItemIcon, itemIcon = pcall(C_Item.GetItemIconByID, itemID)
-                    if okItemIcon and itemIcon and itemIcon ~= 0 then
-                        return itemIcon
-                    end
+                iconToken = GetSafeIconToken(tex)
+                if iconToken then
+                    return iconToken
                 end
 
-                if type(GetItemInfo) == "function" then
-                    local okInfo, _, _, _, _, _, _, _, _, itemIcon = pcall(GetItemInfo, itemID)
-                    if okInfo and itemIcon and itemIcon ~= 0 then
-                        return itemIcon
-                    end
-                end
-            end
-        end
-
-        local linkKeys = { "ItemLink", "itemLink", "Link", "link", "Hyperlink", "hyperlink" }
-        for _, key in ipairs(linkKeys) do
-            local itemLink = SafeTableField(reward, key)
-            if type(itemLink) == "string" and itemLink ~= "" and type(GetItemInfo) == "function" then
-                local okInfo, _, _, _, _, _, _, _, _, itemIcon = pcall(GetItemInfo, itemLink)
-                if okInfo and itemIcon and itemIcon ~= 0 then
-                    return itemIcon
+                local atlas = SafeTableMethodValue(value, "GetAtlas")
+                if type(atlas) == "string" and atlas ~= "" then
+                    return "atlas:" .. atlas
                 end
             end
         end
@@ -2134,37 +2170,6 @@ local function SnapshotDialogRewards()
             end
         end
 
-        local itemIDKeys = { "ItemID", "itemID", "itemId", "itemid" }
-        for _, key in ipairs(itemIDKeys) do
-            local itemID = SafeToNumber(SafeTableField(reward, key))
-            if itemID and itemID > 0 then
-                if C_Item and type(C_Item.GetItemNameByID) == "function" then
-                    local okItemName, itemName = pcall(C_Item.GetItemNameByID, itemID)
-                    if okItemName and type(itemName) == "string" and itemName ~= "" then
-                        return itemName
-                    end
-                end
-
-                if type(GetItemInfo) == "function" then
-                    local okInfo, itemName = pcall(GetItemInfo, itemID)
-                    if okInfo and type(itemName) == "string" and itemName ~= "" then
-                        return itemName
-                    end
-                end
-            end
-        end
-
-        local linkKeys = { "ItemLink", "itemLink", "Link", "link", "Hyperlink", "hyperlink" }
-        for _, key in ipairs(linkKeys) do
-            local itemLink = SafeTableField(reward, key)
-            if type(itemLink) == "string" and itemLink ~= "" and type(GetItemInfo) == "function" then
-                local okInfo, itemName = pcall(GetItemInfo, itemLink)
-                if okInfo and type(itemName) == "string" and itemName ~= "" then
-                    return itemName
-                end
-            end
-        end
-
         return nil
     end
 
@@ -2176,10 +2181,6 @@ local function SnapshotDialogRewards()
         local countKeys = { "Count", "count", "Quantity", "quantity", "Amount", "amount", "StackSize", "stackSize", "NumItems", "numItems" }
         for _, key in ipairs(countKeys) do
             local value = SafeTableField(reward, key)
-            local numericValue = SafeToNumber(value)
-            if numericValue and numericValue > 0 then
-                return tostring(numericValue)
-            end
             if type(value) == "string" and value ~= "" then
                 return value
             end
@@ -2221,10 +2222,12 @@ local function SnapshotDialogRewards()
             namedCount = namedCount + 1
             name = NormalizeRewardName(name)
             local iconTag = ""
-            if type(icon) == "number" and icon > 0 then
-                iconTag = "|T" .. tostring(icon) .. ":14:14:0:0|t "
-            elseif type(icon) == "string" and icon ~= "" then
-                iconTag = "|T" .. icon .. ":14:14:0:0|t "
+            if type(icon) == "string" and icon ~= "" then
+                if icon:sub(1, 6) == "atlas:" and #icon > 6 then
+                    iconTag = "|A" .. icon:sub(7) .. ":14:14|a "
+                else
+                    iconTag = "|T" .. icon .. ":14:14:0:0|t "
+                end
             end
 
             if type(count) == "string" and count ~= "" and count ~= "1" then
@@ -2255,9 +2258,16 @@ local function WarmRewardCacheFromPins()
 
     local queue = {}
     local representativeByDifficulty = {}
+    local rewardStyle = GetConfiguredHuntRewardStyle()
+    local wantsIcons = RewardStyleShowsIcons(rewardStyle)
     for _, hunt in ipairs(liveHunts) do
         local cachedRewards = rewardCache[hunt.questID]
-        if type(hunt.questID) == "number" and IsRewardCacheMissingOrEmpty(cachedRewards) then
+        local cacheMissingOrEmpty = IsRewardCacheMissingOrEmpty(cachedRewards)
+        local cacheMissingIcons = wantsIcons
+            and type(cachedRewards) == "table"
+            and #cachedRewards > 0
+            and not RewardListHasIconTags(cachedRewards)
+        if type(hunt.questID) == "number" and (cacheMissingOrEmpty or cacheMissingIcons) then
             local difficulty = hunt.difficulty or DIFFICULTY_NORMAL
             if representativeByDifficulty[difficulty] == nil then
                 representativeByDifficulty[difficulty] = {
@@ -2323,7 +2333,7 @@ local function WarmRewardCacheFromPins()
 
                 if entry and entry.difficulty then
                     local existingDifficultyRewards = difficultyRewardCache[entry.difficulty]
-                    if type(existingDifficultyRewards) ~= "table" or GetRewardListScore(rewards) > GetRewardListScore(existingDifficultyRewards) then
+                    if ShouldReplaceRewardList(rewards, existingDifficultyRewards) then
                         difficultyRewardCache[entry.difficulty] = CopyStringList(rewards)
                     end
 
@@ -2332,7 +2342,7 @@ local function WarmRewardCacheFromPins()
                         for _, hunt in ipairs(liveHunts) do
                             if hunt.difficulty == entry.difficulty and type(hunt.questID) == "number" then
                                 local existingQuestRewards = rewardCache[hunt.questID]
-                                if type(existingQuestRewards) ~= "table" or GetRewardListScore(bestForDifficulty) > GetRewardListScore(existingQuestRewards) then
+                                if ShouldReplaceRewardList(bestForDifficulty, existingQuestRewards) then
                                     rewardCache[hunt.questID] = CopyStringList(bestForDifficulty)
                                 end
                             end
@@ -4009,7 +4019,7 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
 
         hasHuntContext = IsRuntimeEnabled()
             and (not isRestrictedInstance)
-            and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible() or HasActivePreyQuest())
+            and (IsMissionFrameVisible() or huntInteractionActive or IsOptionsPreviewVisible())
         return hasHuntContext
     end
 

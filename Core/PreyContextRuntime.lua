@@ -7,11 +7,23 @@ local PreyContextRuntime = {}
 Preydator:RegisterModule("PreyContextRuntime", PreyContextRuntime)
 
 local QUEST_ZONE_MAP_OVERRIDES = {
+    -- Keep explicit known fallback for clients where task-zone map lookup
+    -- intermittently returns nil.
     [91260] = 2437,
+
+    -- Task-zone map lookup can be nil for this prey family on some clients.
+    [91106] = 2413,
+    [91232] = 2413,
+    [91233] = 2413,
 }
 
 local MAP_ID_EQUIVALENTS = {
+    -- Canonicalize equivalent map pairs to one stable ID so comparisons
+    -- succeed regardless of which side returns parent vs sub-map.
+    [2437] = 2437,
     [2536] = 2437,
+    [2413] = 2413,
+    [2576] = 2413,
 }
 
 local function CanonicalizeMapID(mapID)
@@ -20,6 +32,36 @@ local function CanonicalizeMapID(mapID)
         return nil
     end
     return MAP_ID_EQUIVALENTS[mapID] or mapID
+end
+
+local function SafeToNumber(value)
+    local ok, result = pcall(tonumber, value)
+    if ok and type(result) == "number" then
+        return result
+    end
+    return nil
+end
+
+local function ResolveExpectedQuestMapID(questID, ctx)
+    local numericQuestID = SafeToNumber(questID)
+    if not numericQuestID then
+        return nil
+    end
+
+    local fromOverride = CanonicalizeMapID(QUEST_ZONE_MAP_OVERRIDES[numericQuestID])
+    if fromOverride then
+        return fromOverride
+    end
+
+    local taskQuestApi = ctx and ctx.taskQuestApi
+    if taskQuestApi and type(taskQuestApi.GetQuestZoneID) == "function" then
+        local okZoneMapID, rawZoneMapID = pcall(taskQuestApi.GetQuestZoneID, numericQuestID)
+        if okZoneMapID then
+            return CanonicalizeMapID(SafeToNumber(rawZoneMapID))
+        end
+    end
+
+    return nil
 end
 
 function PreyContextRuntime:GetPreyZoneInfo(questID, ctx)
@@ -65,15 +107,14 @@ function PreyContextRuntime:IsPreyQuestOnCurrentMap(questID, ctx)
         return true
     end
 
-    -- Targeted fallback for known map-ID mismatch cases where quest-log
-    -- isOnMap can be false on a child/sub-map while the player is still
-    -- in the valid prey zone map context.
-    local expectedMapID = QUEST_ZONE_MAP_OVERRIDES[tonumber(questID)]
+    -- Generic fallback for sub-map mismatches: compare canonicalized player
+    -- map ID against canonicalized quest-zone map ID.
+    local expectedMapID = ResolveExpectedQuestMapID(questID, ctx)
     if expectedMapID ~= nil then
         local mapApi = ctx and ctx.mapApi
         if mapApi and type(mapApi.GetBestMapForUnit) == "function" then
             local okMapID, rawMapID = pcall(mapApi.GetBestMapForUnit, "player")
-            local playerMapID = okMapID and CanonicalizeMapID(rawMapID) or nil
+            local playerMapID = okMapID and CanonicalizeMapID(SafeToNumber(rawMapID)) or nil
             if playerMapID and playerMapID == expectedMapID then
                 return true
             end
@@ -96,8 +137,9 @@ function PreyContextRuntime:RefreshInPreyZoneStatus(questID, force, state, ctx)
 
     local getTime = ctx and ctx.getTime
     local now = (type(getTime) == "function" and getTime()) or 0
+    -- Recheck false-zone state quickly so zone entry reflects without long delays.
     local staleFalseCheck = state.inPreyZone == false
-        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
+        and (now - (state.lastZoneStatusRefreshAt or 0)) >= 0.5
     local staleTrueCheck = state.inPreyZone == true
         and (now - (state.lastZoneStatusRefreshAt or 0)) >= 2.0
 
