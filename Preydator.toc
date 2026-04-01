@@ -5,7 +5,7 @@
 ## Category-enUS: Quests
 ## Category-koKR: 퀘스트
 ## Category-zhCN: 任务
-## Version: 2.1.11
+## Version: 2.1.13
 ## AddonCompartmentFunc: Preydator_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: Preydator_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: Preydator_OnAddonCompartmentLeave

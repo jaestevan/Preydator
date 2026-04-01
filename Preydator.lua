@@ -465,7 +465,6 @@ local state = {
 }
 
 local UPDATE_INTERVAL_SECONDS = 0.5
-local INSPECT_VERSION = "v4"
 local ExtractWidgetQuestID
 local FindPreyWidgetProgressState
 
@@ -5030,21 +5029,6 @@ Preydator.API = {
     end,
     AddDebugLog = function(kind, message, forcePrint)
         AddDebugLog(kind, message, forcePrint)
-    end,
-    OpenLegacyOptionsPanel = function()
-        if Settings and Settings.OpenToCategory then
-            if type(UI.optionsCategoryID) == "number" then
-                Settings.OpenToCategory(UI.optionsCategoryID)
-                return true
-            end
-
-            if UI.optionsPanel and type(UI.optionsPanel.categoryID) == "number" then
-                Settings.OpenToCategory(UI.optionsPanel.categoryID)
-                return true
-            end
-        end
-
-        return false
     end,
 }
 

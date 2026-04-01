@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.13 - 2026-04-01
+
+### Fixed
+- Fixed delve combat chat spam (`Preydator HuntScanner: snapshot error: attempt to perform string conversion on a secret string value`) caused by stale `huntInteractionActive` state still allowing non-login HuntScanner event paths to queue snapshot work in restricted instances.
+- Added a blanket non-login restricted-instance early return in HuntScanner event handling, so `ACHIEVEMENT_EARNED`, `CRITERIA_UPDATE`, `QUEST_DATA_LOAD_RESULT`, and other events cannot trigger snapshot passes while inside delve/instance content.
+- Hardened HuntScanner reward snapshot and formatting paths to avoid raw `tostring(...)`/`tonumber(...)` coercion on protected reward payload strings/numbers, reducing taint propagation into Blizzard widget tooltip/layout code (`Blizzard_UIWidgetTemplateTextWithState.lua`, `MoneyFrame.lua`, `LayoutFrame.lua`).
+- Added an emergency taint guard that disables HuntScanner reward-cache warming via `AdventureMapQuestChoiceDialog` reward widget introspection. This prevents Preydator from touching protected reward-frame payloads that can spill secret-number taint into Blizzard world-map tooltip reward rendering (`GameTooltip.lua`, `MoneyFrame.lua`, `SharedTooltipTemplates.lua`).
+
+### Cleanup
+- Removed the stale legacy inspect-version constant from `Preydator.lua` (`INSPECT_VERSION`), which no longer had any live read paths after inspect routing moved to `Modules/DebugInspect.lua`.
+- Removed the unused `Preydator.API.OpenLegacyOptionsPanel` compatibility shim from `Preydator.lua`.
+- Fixed Hunt Tracker appearing when speaking to Astalor Bloodsworn (or other Hunt Table NPCs) outside of an active Hunt Table session. `IsHuntTableContext` now requires the Hunt Table mission frame to be visible before treating a matching NPC ID alone as a valid context signal; the explicit gossip-spell check (which covers opening the Table from its gossip menu) is still evaluated first and remains ungated.
+
 ## 2.1.11 - 2026-03-31
 
 ### Fixed

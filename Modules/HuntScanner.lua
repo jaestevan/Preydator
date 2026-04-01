@@ -21,6 +21,7 @@ local REWARD_POLL_INTERVAL = 0.10
 local REWARD_TIMEOUT_SECONDS = 4.0
 local REWARD_MAX_EMPTY_RETRIES = 2
 local REWARD_MIN_STABLE_SECONDS = 0.50
+local HUNT_REWARD_WARMING_ENABLED = false
 
 local panelFrame
 local panelRows = {}
@@ -333,7 +334,7 @@ local function GetRewardListScore(list)
 
     local score = 0
     for _, text in ipairs(list) do
-        local value = tostring(text or "")
+        local value = SafeToString(text or "")
         if value ~= "" then
             score = score + 1
             if not value:find(" XP", 1, true) then
@@ -390,7 +391,7 @@ function RewardListHasIconTags(list)
     end
 
     for _, entry in ipairs(list) do
-        local text = tostring(entry or "")
+        local text = SafeToString(entry or "")
         if text:find("|T", 1, true) or text:find("|A", 1, true) then
             return true
         end
@@ -411,7 +412,7 @@ local function FormatRewardEntriesForStyle(list, rewardStyle)
     local entries = {}
 
     for _, entry in ipairs(list) do
-        local text = tostring(entry or "")
+        local text = SafeToString(entry or "")
         if text ~= "" then
             if not showIcons then
                 text = StripRewardIconTags(text)
@@ -1236,7 +1237,7 @@ local function UpdateAvailabilityCacheFromHunts(hunts)
     }
 
     for _, hunt in ipairs(hunts or {}) do
-        local questID = tonumber(hunt and hunt.questID)
+        local questID = SafeToNumber(hunt and hunt.questID)
         if questID and questID > 0 then
             local isOnQuest = C_QuestLog and type(C_QuestLog.IsOnQuest) == "function" and C_QuestLog.IsOnQuest(questID) == true
             if not isOnQuest then
@@ -1277,7 +1278,7 @@ local function CopyStringList(list)
     end
 
     for index, value in ipairs(list) do
-        out[index] = tostring(value)
+        out[index] = SafeToString(value)
     end
     return out
 end
@@ -1427,10 +1428,10 @@ local function MigrateDifficultyKeysFromLocalizedToCanonical()
                 local newScore = 0
                 local existingScore = 0
                 for _, r in ipairs(rewards) do
-                    if tostring(r or "") ~= "" then newScore = newScore + 1 end
+                    if SafeToString(r or "") ~= "" then newScore = newScore + 1 end
                 end
                 for _, r in ipairs(existingRewards) do
-                    if tostring(r or "") ~= "" then existingScore = existingScore + 1 end
+                    if SafeToString(r or "") ~= "" then existingScore = existingScore + 1 end
                 end
                 if newScore > existingScore then
                     newCache[canonicalKey] = CopyStringList(rewards)
@@ -1507,12 +1508,12 @@ end
 
 local function GetActivePreyStage()
     local state = GetCoreState()
-    local stage = tonumber(state and state.stage)
+    local stage = SafeToNumber(state and state.stage)
     if stage and stage >= 1 then
         return stage
     end
 
-    local progressState = tonumber(state and state.progressState)
+    local progressState = SafeToNumber(state and state.progressState)
     if progressState == 0 then return 1 end
     if progressState == 1 then return 2 end
     if progressState == 2 then return 3 end
@@ -1586,14 +1587,19 @@ end
 
 local function IsHuntTableContext(options)
     local npcID = ParseTargetNPCID()
-    if npcID and HUNT_TABLE_NPC_IDS[npcID] then
-        return true, npcID
-    end
 
+    -- Explicit hunt-table gossip option is the primary signal (works before mission frame opens).
     for _, option in ipairs(options or {}) do
         if type(option) == "table" and option.spellID == HUNT_TABLE_CONTROLLER_SPELL_ID then
             return true, npcID
         end
+    end
+
+    -- NPC ID alone is not enough: Astalor and similar NPCs have regular gossip/quest
+    -- dialogue unrelated to the Hunt Table.  Only treat the NPC as hunt-table context
+    -- when the mission frame is already visible (i.e. the Table was actually opened).
+    if npcID and HUNT_TABLE_NPC_IDS[npcID] and IsMissionFrameVisible() then
+        return true, npcID
     end
 
     return false, npcID
@@ -2089,19 +2095,25 @@ local function SnapshotDialogRewards()
     end
 
     local function IsNumericRewardText(text)
-        if type(text) ~= "string" then
+        local safeText = SafeToString(text)
+        if safeText == "" or safeText == "<protected string>" then
             return false
         end
 
-        local normalized = text:gsub("[%s,%.]", "")
+        local normalized = safeText:gsub("[%s,%.]", "")
         return normalized:match("^%d+$") ~= nil
     end
 
     local function NormalizeRewardName(name)
-        if IsNumericRewardText(name) then
-            return tostring(name) .. " XP"
+        local safeName = SafeToString(name)
+        if safeName == "" or safeName == "<protected string>" then
+            return nil
         end
-        return name
+
+        if IsNumericRewardText(safeName) then
+            return safeName .. " XP"
+        end
+        return safeName
     end
 
     local function ExtractRewardIcon(reward)
@@ -2160,12 +2172,18 @@ local function SnapshotDialogRewards()
         for _, key in ipairs(nameKeys) do
             local value = SafeTableField(reward, key)
             if type(value) == "string" and value ~= "" then
-                return value
+                local safeValue = SafeToString(value)
+                if safeValue ~= "" and safeValue ~= "<protected string>" then
+                    return safeValue
+                end
             end
             if type(value) == "table" then
                 local text = SafeTableMethodValue(value, "GetText")
                 if type(text) == "string" and text ~= "" then
-                    return text
+                    local safeText = SafeToString(text)
+                    if safeText ~= "" and safeText ~= "<protected string>" then
+                        return safeText
+                    end
                 end
             end
         end
@@ -2182,12 +2200,18 @@ local function SnapshotDialogRewards()
         for _, key in ipairs(countKeys) do
             local value = SafeTableField(reward, key)
             if type(value) == "string" and value ~= "" then
-                return value
+                local safeValue = SafeToString(value)
+                if safeValue ~= "" and safeValue ~= "<protected string>" then
+                    return safeValue
+                end
             end
             if type(value) == "table" then
                 local text = SafeTableMethodValue(value, "GetText")
                 if type(text) == "string" and text ~= "" then
-                    return text
+                    local safeText = SafeToString(text)
+                    if safeText ~= "" and safeText ~= "<protected string>" then
+                        return safeText
+                    end
                 end
             end
         end
@@ -2196,12 +2220,18 @@ local function SnapshotDialogRewards()
         for _, key in ipairs(textKeys) do
             local value = SafeTableField(reward, key)
             if type(value) == "string" and value ~= "" then
-                return value
+                local safeValue = SafeToString(value)
+                if safeValue ~= "" and safeValue ~= "<protected string>" then
+                    return safeValue
+                end
             end
             if type(value) == "table" then
                 local text = SafeTableMethodValue(value, "GetText")
                 if type(text) == "string" and text ~= "" then
-                    return text
+                    local safeText = SafeToString(text)
+                    if safeText ~= "" and safeText ~= "<protected string>" then
+                        return safeText
+                    end
                 end
             end
         end
@@ -2242,6 +2272,13 @@ local function SnapshotDialogRewards()
 end
 
 local function WarmRewardCacheFromPins()
+    -- Hotfix: reward-frame introspection has repeatedly tainted Blizzard tooltip/money
+    -- arithmetic paths (secret number values). Keep this disabled until rewards can be
+    -- sourced from non-widget APIs only.
+    if not HUNT_REWARD_WARMING_ENABLED then
+        return
+    end
+
     if not CanInspectHuntRewardsNow() then
         return
     end
@@ -2442,7 +2479,7 @@ end
 local function CaptureSnapshot(options, npcID)
     local interactionType = (C_PlayerInteractionManager and C_PlayerInteractionManager.GetInteractionType and C_PlayerInteractionManager.GetInteractionType()) or nil
     if interactionType ~= nil then
-        lastInteractionType = interactionType
+        lastInteractionType = SafeToNumber(interactionType) or lastInteractionType
     else
         interactionType = lastInteractionType
     end
@@ -3529,7 +3566,7 @@ HandleInteractionSnapshot = function()
     end)
 
     if not ok then
-        print("Preydator HuntScanner: snapshot error: " .. tostring(err))
+        print("Preydator HuntScanner: snapshot error: " .. SafeToString(err))
     end
 
     isHandlingSnapshot = false
@@ -4046,6 +4083,18 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
+    -- Blanket restricted-instance gate for all non-login events.
+    -- This prevents stale huntInteractionActive state from queuing snapshot passes on
+    -- achievement/criteria/quest-data updates while in delve/instance combat.
+    if isRestrictedInstance then
+        if huntInteractionActive then
+            huntInteractionActive = false
+            SyncNoisyEventSubscriptions()
+        end
+        HidePanel()
+        return
+    end
+
     if event == "ACHIEVEMENT_EARNED" or event == "CRITERIA_UPDATE" then
         if event == "ACHIEVEMENT_EARNED" then
             MarkAchievementCompleted(select(1, ...))
@@ -4067,16 +4116,6 @@ huntEventFrame:SetScript("OnEvent", function(_, event, ...)
 
     if (event == "QUEST_LOG_UPDATE" or event == "UPDATE_UI_WIDGET" or event == "UPDATE_ALL_UI_WIDGETS") and GetHasHuntContext() then
         ProcessRewardCacheLifecycle()
-    end
-
-    if isRestrictedInstance and event ~= "PLAYER_LOGIN" then
-        if huntInteractionActive then
-            huntInteractionActive = false
-            SyncNoisyEventSubscriptions()
-        end
-
-        HidePanel()
-        return
     end
 
     if event == "GOSSIP_SHOW" then
